@@ -73,12 +73,12 @@ impl NetInv<Item> for CollTok {
 
     open spec fn deliverable_at(v: Seq<Item>, i: nat) -> bool { fifo_deliverable(v, i) }
 
-    open spec fn extra(sent: Map<ChanId, Seq<Item>>) -> bool { true }
+    open spec fn history_inv(sent: Map<ChanId, Seq<Item>>) -> bool { true }
 
     // This protocol's guarantee is about single messages, so there is
     // nothing for a reader to conclude from a pair.
-    open spec fn extra_gives2(c: ChanId, m1: Item, m2: Item) -> bool { true }
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<Item>>, c: ChanId,
+    open spec fn pair_gives(c: ChanId, m1: Item, m2: Item) -> bool { true }
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<Item>>, c: ChanId,
                                 i: nat, j: nat, m1: Item, m2: Item) { }
 
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Item>, m: Item) { }
@@ -86,16 +86,16 @@ impl NetInv<Item> for CollTok {
     open spec fn needs_cause(c: ChanId, m: Item) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) { }
     // No cross-channel property to state over the record.
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, Item)>) -> bool { true }
-    proof fn lemma_extra_w_init() { }
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, Item)>) -> bool { true }
+    proof fn lemma_record_inv_init() { }
 
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Item)>,
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Item)>,
                                      c: ChanId, i: nat, m: Item,
                                      causes: Set<(ChanId, nat, Item)>) { }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Item>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Item>>,
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<Item>>, c: ChanId) { }
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Item>>,
                                    was_sent: Set<(ChanId, nat, Item)>,
                                    c: ChanId, s: Seq<Item>, m: Item,
                                    causes: Set<(ChanId, nat, Item)>) { }

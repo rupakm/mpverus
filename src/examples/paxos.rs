@@ -221,7 +221,7 @@ impl NetInv<PMsg> for Paxos {
     open spec fn deliverable_at(v: Seq<PMsg>, i: nat) -> bool { fifo_deliverable(v, i) }
 
     /// Every proposer's log is a strictly increasing run of its own ballots.
-    open spec fn extra(sent: Map<ChanId, Seq<PMsg>>) -> bool {
+    open spec fn history_inv(sent: Map<ChanId, Seq<PMsg>>) -> bool {
         &&& forall|p: int| sent.dom().contains(#[trigger] pdec(p)) ==> log_ok(p, sent[pdec(p)])
         &&& forall|a: int| sent.dom().contains(#[trigger] alog(a)) ==> alog_ok(sent[alog(a)])
     }
@@ -257,7 +257,7 @@ impl NetInv<PMsg> for Paxos {
     /// `b'` in that promise. A proposer that gathers a quorum of promises and
     /// takes the highest report therefore cannot miss a value that was already
     /// chosen.
-    open spec fn extra_gives2(c: ChanId, m1: PMsg, m2: PMsg) -> bool {
+    open spec fn pair_gives(c: ChanId, m1: PMsg, m2: PMsg) -> bool {
         forall|a: int| c == #[trigger] alog(a) ==> {
             &&& (m1 is LPromise && m2 is LPromise
                     ==> blt(m1->LPromise_0, m2->LPromise_0))
@@ -268,7 +268,7 @@ impl NetInv<PMsg> for Paxos {
         }
     }
 
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<PMsg>>, c: ChanId,
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<PMsg>>, c: ChanId,
                                 i: nat, j: nat, m1: PMsg, m2: PMsg) {
         assert forall|a: int| c == #[trigger] alog(a) implies {
             &&& (m1 is LPromise && m2 is LPromise
@@ -298,7 +298,7 @@ impl NetInv<PMsg> for Paxos {
     /// Stated over the RECORD rather than over the histories. Over `sent` this
     /// same fact needs a map insertion and sequence indices at every step, and
     /// did not go through; here preservation concerns one element.
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, PMsg)>) -> bool {
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, PMsg)>) -> bool {
         forall|c: ChanId, i: nat, m: PMsg|
             (#[trigger] was_sent.contains((c, i, m))) && is_p2b(c)
                 ==> exists|j: nat| was_sent.contains(
@@ -306,9 +306,9 @@ impl NetInv<PMsg> for Paxos {
                          PMsg::Accept(m->Accepted_0, m->Accepted_1)))
     }
 
-    proof fn lemma_extra_w_init() { }
+    proof fn lemma_record_inv_init() { }
 
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, PMsg)>,
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, PMsg)>,
                                      c: ChanId, i: nat, m: PMsg,
                                      causes: Set<(ChanId, nat, PMsg)>) {
         let post = was_sent.insert((c, i, m));
@@ -336,9 +336,9 @@ impl NetInv<PMsg> for Paxos {
         }
     }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
 
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<PMsg>>, c: ChanId) {
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<PMsg>>, c: ChanId) {
         let post = sent.insert(c, Seq::<PMsg>::empty());
         assert forall|p: int| post.dom().contains(#[trigger] pdec(p))
             implies log_ok(p, post[pdec(p)]) by {
@@ -350,7 +350,7 @@ impl NetInv<PMsg> for Paxos {
         }
     }
 
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<PMsg>>,
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<PMsg>>,
                                    was_sent: Set<(ChanId, nat, PMsg)>,
                                    c: ChanId, s: Seq<PMsg>, m: PMsg,
                                    causes: Set<(ChanId, nat, PMsg)>) {
@@ -468,9 +468,9 @@ pub proof fn lemma_accept_after_promise(
 // chosen at different ballots are equal.
 //
 // The route is clear and the framework now admits it. Agreement is a statement
-// about messages on many acceptors' channels, so it belongs in `extra`, and
+// about messages on many acceptors' channels, so it belongs in `history_inv`, and
 // preserving it at a send needs the witnesses the sender presented -- which
-// `lemma_extra_preserved` now receives, and did not before this protocol was
+// `lemma_history_inv_preserved` now receives, and did not before this protocol was
 // attempted. A first cross-participant clause was written and is left out here
 // because its proof did not converge, not because the framework refuses it; the
 // obstacle was quantifier plumbing around an existential nested under a
@@ -478,7 +478,7 @@ pub proof fn lemma_accept_after_promise(
 //
 // The remaining pieces, in order:
 //
-//   1. `Accepted` implies the matching `Accept` -- one `extra` clause, using
+//   1. `Accepted` implies the matching `Accept` -- one `history_inv` clause, using
 //      the causes now available.
 //   2. `Accept(b, v)` implies `Decided(b, v)` on the proposer's log, and the
 //      log makes the value a function of the ballot.

@@ -62,12 +62,12 @@ impl NetInv<Pkt> for Lossy {
     open spec fn deliverable_at(v: Seq<Pkt>, i: nat) -> bool { true }
 
     /// No guarantee that a single message cannot express.
-    open spec fn extra(sent: Map<ChanId, Seq<Pkt>>) -> bool { true }
+    open spec fn history_inv(sent: Map<ChanId, Seq<Pkt>>) -> bool { true }
 
     // This protocol's guarantee is about single messages, so there is
     // nothing for a reader to conclude from a pair.
-    open spec fn extra_gives2(c: ChanId, m1: Pkt, m2: Pkt) -> bool { true }
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
+    open spec fn pair_gives(c: ChanId, m1: Pkt, m2: Pkt) -> bool { true }
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
                                 i: nat, j: nat, m1: Pkt, m2: Pkt) { }
 
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Pkt>, m: Pkt) { }
@@ -75,16 +75,16 @@ impl NetInv<Pkt> for Lossy {
     open spec fn needs_cause(c: ChanId, m: Pkt) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Pkt, causes: Set<(ChanId, nat, Pkt)>) { }
     // No cross-channel property to state over the record.
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, Pkt)>) -> bool { true }
-    proof fn lemma_extra_w_init() { }
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, Pkt)>) -> bool { true }
+    proof fn lemma_record_inv_init() { }
 
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Pkt)>,
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Pkt)>,
                                      c: ChanId, i: nat, m: Pkt,
                                      causes: Set<(ChanId, nat, Pkt)>) { }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Pkt>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Pkt>>,
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<Pkt>>, c: ChanId) { }
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Pkt>>,
                                    was_sent: Set<(ChanId, nat, Pkt)>,
                                    c: ChanId, s: Seq<Pkt>, m: Pkt,
                                    causes: Set<(ChanId, nat, Pkt)>) { }

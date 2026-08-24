@@ -25,7 +25,7 @@ pub trait NetInv<M> : Sized {
     /// An additional invariant over the send histories, for guarantees that a
     /// single message cannot express -- an ordering between messages, say.
     /// Most protocols leave this `true`.
-    spec fn extra(sent: Map<ChanId, Seq<M>>) -> bool;
+    spec fn history_inv(sent: Map<ChanId, Seq<M>>) -> bool;
 
     /// The one obligation: the gate is strong enough to establish the
     /// guarantee for the message it admits.
@@ -34,16 +34,16 @@ pub trait NetInv<M> : Sized {
         ensures  Self::wit_inv(c, m);
 
     /// The additional invariant holds of the initial state.
-    proof fn lemma_extra_init(chans: Set<ChanId>)
-        ensures Self::extra(Map::new(chans, |c: ChanId| Seq::<M>::empty()));
+    proof fn lemma_history_inv_init(chans: Set<ChanId>)
+        ensures Self::history_inv(Map::new(chans, |c: ChanId| Seq::<M>::empty()));
 
     /// ... and to preserve the additional invariant.
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
         requires
-            Self::extra(sent), Self::gate(c, s, m),
+            Self::history_inv(sent), Self::gate(c, s, m),
             sent.dom().contains(c), sent[c] == s,
         ensures
-            Self::extra(sent.insert(c, s.push(m)));
+            Self::history_inv(sent.insert(c, s.push(m)));
 }
 }
 
@@ -67,7 +67,7 @@ tokenized_state_machine!{
 
         /// The protocol's guarantee, applied through the type parameter.
         #[invariant]
-        pub spec fn protocol_extra(&self) -> bool { Inv::extra(self.sent) }
+        pub spec fn protocol_extra(&self) -> bool { Inv::history_inv(self.sent) }
 
         #[invariant]
         pub spec fn protocol_inv(&self) -> bool {
@@ -112,7 +112,7 @@ tokenized_state_machine!{
 
         #[inductive(boot)]
         fn boot_inductive(post: Self, chans: Set<ChanId>) {
-            Inv::lemma_extra_init(chans);
+            Inv::lemma_history_inv_init(chans);
         }
 
         #[inductive(do_send)]
@@ -120,9 +120,9 @@ tokenized_state_machine!{
             Inv::lemma_gate_gives_inv(c, s, m);
             assert(pre.sent.dom().contains(c));
             assert(pre.sent[c] == s);
-            Inv::lemma_extra_preserved(pre.sent, c, s, m);
+            Inv::lemma_history_inv_preserved(pre.sent, c, s, m);
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
-            assert(Inv::extra(post.sent));
+            assert(Inv::history_inv(post.sent));
             assert forall|k: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((k, i, mm))
                 implies post.sent.dom().contains(k)
                     && i < post.sent[k].len() && post.sent[k][i as int] == mm by {
@@ -152,10 +152,10 @@ impl NetInv<Pkt> for Lossy {
     open spec fn gate(c: ChanId, s: Seq<Pkt>, m: Pkt) -> bool { c == link() ==> ok(m.v) }
     open spec fn wit_inv(c: ChanId, m: Pkt) -> bool { c == link() ==> ok(m.v) }
     open spec fn deliverable_at(v: Seq<Pkt>, i: nat) -> bool { true }
-    open spec fn extra(sent: Map<ChanId, Seq<Pkt>>) -> bool { true }
+    open spec fn history_inv(sent: Map<ChanId, Seq<Pkt>>) -> bool { true }
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Pkt>, m: Pkt) { }
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
                                    s: Seq<Pkt>, m: Pkt) { }
 }
 }
@@ -163,7 +163,7 @@ fn main(){}
 
 verus!{
 /// A protocol whose guarantee is about PAIRS of messages, which `wit_inv`
-/// cannot express. It uses `extra` and nothing else changes.
+/// cannot express. It uses `history_inv` and nothing else changes.
 pub struct Beats;
 pub uninterp spec fn beat_link() -> ChanId;
 
@@ -174,7 +174,7 @@ impl NetInv<Pkt> for Beats {
     open spec fn wit_inv(c: ChanId, m: Pkt) -> bool { true }
     open spec fn deliverable_at(v: Seq<Pkt>, i: nat) -> bool { i == v.len() }
 
-    open spec fn extra(sent: Map<ChanId, Seq<Pkt>>) -> bool {
+    open spec fn history_inv(sent: Map<ChanId, Seq<Pkt>>) -> bool {
         sent.dom().contains(beat_link()) ==>
             forall|x: int, y: int| 0 <= x < y < sent[beat_link()].len()
                 ==> (#[trigger] sent[beat_link()][x]).v < (#[trigger] sent[beat_link()][y]).v
@@ -182,12 +182,12 @@ impl NetInv<Pkt> for Beats {
 
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Pkt>, m: Pkt) { }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) {
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) {
         let s0 = Map::new(chans, |c: ChanId| Seq::<Pkt>::empty());
         if s0.dom().contains(beat_link()) { assert(s0[beat_link()].len() == 0); }
     }
 
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
                                    s: Seq<Pkt>, m: Pkt) {
         let post = sent.insert(c, s.push(m));
         if post.dom().contains(beat_link()) {

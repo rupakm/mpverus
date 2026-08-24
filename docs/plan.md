@@ -1102,12 +1102,12 @@ prints a result that came through the endpoint API.
 dropping the participants' tokens; a demo that wants to shut down cleanly may
 need the services handed back, as `multithread.rs` does.
 
-## B. `extra` is write-only — **contained, and validated**
+## B. `history_inv` is write-only — **contained, and validated**
 
 A pairwise guarantee can be stated and proved as a machine invariant, but
 `NetSM` exposes only `learn`, `learn_cause` and `witness_agree`. There is no way
-for a service to consume `extra`. Heartbeat's "sequence numbers increase" is
-proved and unusable from code — the one protocol whose guarantee needed `extra`
+for a service to consume `history_inv`. Heartbeat's "sequence numbers increase" is
+proved and unusable from code — the one protocol whose guarantee needed `history_inv`
 cannot act on it.
 
 Note what is NOT the problem: a service that OWNS a channel reads its ordering
@@ -1116,22 +1116,22 @@ is consuming a pairwise guarantee about a channel you do not own.
 
 **Design**, mirroring `cause_gives`. Two witnesses in, a pure fact out:
 
-    spec fn extra_gives2(c: ChanId, m1: M, m2: M) -> bool;
+    spec fn pair_gives(c: ChanId, m1: M, m2: M) -> bool;
 
-    proof fn lemma_extra_gives2(sent, c, i, j, m1, m2)
-        requires extra(sent), i < j < sent[c].len(),
+    proof fn lemma_pair_gives(sent, c, i, j, m1, m2)
+        requires history_inv(sent), i < j < sent[c].len(),
                  sent[c][i] == m1, sent[c][j] == m2,
-        ensures  extra_gives2(c, m1, m2);
+        ensures  pair_gives(c, m1, m2);
 
     property!{ learn_pair(c, i, j, m1, m2) {
         have was_sent >= set { (c, i, m1) };
         have was_sent >= set { (c, j, m2) };
         require(i < j);
         birds_eye let s = pre.sent;
-        assert(Inv::extra_gives2(c, m1, m2)) by { Inv::lemma_extra_gives2(..); };
+        assert(Inv::pair_gives(c, m1, m2)) by { Inv::lemma_pair_gives(..); };
     } }
 
-`extra_gives2` must be pure in `(c, m1, m2)` for the same reason `cause_gives`
+`pair_gives` must be pure in `(c, m1, m2)` for the same reason `cause_gives`
 must be pure: anything mentioning the histories is projected away when the
 `birds_eye` binding goes out of scope.
 
@@ -1140,12 +1140,12 @@ monotone, because the CONCLUSION is a pure predicate about two messages. A pure
 fact cannot later become false. Retaining anything about `s` itself would be
 unsound, and the type system is what stops that.
 
-**Validated:** `spike/extra_read.rs`, 9 verified, 0 errors. A watcher holding two
+**Validated:** `spike/pair_read.rs`, 9 verified, 0 errors. A watcher holding two
 witnesses for a channel it does not own concludes `m1 < m2`. Deleting the
 `learn_pair` call makes it fail, so it is not vacuous.
 
 **Do:** move it into `tok.rs`; `heartbeat.rs`'s `Watcher` uses it to prove the
-beats it received increase; the other seven protocols get `extra_gives2` as
+beats it received increase; the other seven protocols get `pair_gives` as
 `true` and an empty lemma. Add a counterexample: a `Watcher` claiming
 `m1 < m2` without the call.
 
@@ -1263,14 +1263,14 @@ above: the storage node blocks on one writer's channel at a time instead of
 waiting on all of them, and a terminating demo must choose matching step counts.
 `system.rs` already shows the looped arbitrary-size deployment.
 
-**B — `extra` consumable: DONE.** `NetInv` gained `extra_gives2` and
-`lemma_extra_gives2`; `NetSM` gained the `learn_pair` property. Seven protocols
+**B — `history_inv` consumable: DONE.** `NetInv` gained `pair_gives` and
+`lemma_pair_gives`; `NetSM` gained the `learn_pair` property. Seven protocols
 have the trivial version; `heartbeat` has the real one, and `Watcher::two_increase`
 now proves the two beats it received increase — which before was not statable,
-because `extra` was proved and unreachable from code.
+because `history_inv` was proved and unreachable from code.
 
 Checked both ways: deleting the `learn_pair` call fails, and weakening
-`extra_gives2` to `true` fails.
+`pair_gives` to `true` fails.
 
 **C — `rpc` proof-level: RESOLVED, and the plan above was wrong about it.**
 
@@ -1469,10 +1469,10 @@ Not available. Each of these is a rung below.
 
 ## Confirmed gaps
 
-**G1 — `lemma_extra_preserved` cannot see the provenance.** Its signature is
+**G1 — `lemma_history_inv_preserved` cannot see the provenance.** Its signature is
 
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
-        requires Self::extra(sent), Self::gate(c, s, m), ...
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
+        requires Self::history_inv(sent), Self::gate(c, s, m), ...
 
 so preserving a system-wide invariant at a send may use only the gate, which
 reads one channel. Paxos's safety invariant relates messages on many acceptors'

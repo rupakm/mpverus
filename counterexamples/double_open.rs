@@ -26,21 +26,21 @@ impl NetInv<u64> for Triv {
     open spec fn gate(c: ChanId, s: Seq<u64>, m: u64) -> bool { true }
     open spec fn wit_inv(c: ChanId, m: u64) -> bool { true }
     open spec fn deliverable_at(v: Seq<u64>, i: nat) -> bool { fifo_deliverable(v, i) }
-    open spec fn extra(sent: Map<ChanId, Seq<u64>>) -> bool { true }
+    open spec fn history_inv(sent: Map<ChanId, Seq<u64>>) -> bool { true }
     open spec fn needs_cause(c: ChanId, m: u64) -> bool { false }
-    open spec fn extra_gives2(c: ChanId, m1: u64, m2: u64) -> bool { true }
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<u64>>, c: ChanId,
+    open spec fn pair_gives(c: ChanId, m1: u64, m2: u64) -> bool { true }
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<u64>>, c: ChanId,
                                 i: nat, j: nat, m1: u64, m2: u64) { }
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<u64>, m: u64) { }
     proof fn lemma_cause_gives(c: ChanId, m: u64, causes: Set<(ChanId, nat, u64)>) { }
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, u64)>) -> bool { true }
-    proof fn lemma_extra_w_init() { }
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, u64)>,
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, u64)>) -> bool { true }
+    proof fn lemma_record_inv_init() { }
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, u64)>,
                                      c: ChanId, i: nat, m: u64,
                                      causes: Set<(ChanId, nat, u64)>) { }
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<u64>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<u64>>,
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<u64>>, c: ChanId) { }
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<u64>>,
                                    was_sent: Set<(ChanId, nat, u64)>,
                                    c: ChanId, s: Seq<u64>, m: u64,
                                    causes: Set<(ChanId, nat, u64)>) { }

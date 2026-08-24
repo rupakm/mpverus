@@ -290,8 +290,8 @@ A gate is given one channel's history, so it cannot say anything about another
 channel. "This token was really issued by the server" is that kind of statement,
 and no amount of strengthening the gate on the write channel will express it.
 
-`extra` looks like the escape hatch, since it ranges over the whole `sent` map.
-It is not: `lemma_extra_preserved` must prove preservation from `gate(c, s, m)`
+`history_inv` looks like the escape hatch, since it ranges over the whole `sent` map.
+It is not: `lemma_history_inv_preserved` must prove preservation from `gate(c, s, m)`
 alone, so the gate's blindness propagates into it. The same wall, one level up.
 
 The mechanism is provenance, four members of `NetInv`:
@@ -375,11 +375,11 @@ branch.
 
 Two hooks, and choosing the wrong one costs an order of magnitude.
 
-**`extra`, over `sent`.** For a property of ONE channel's ORDER: an ordered
+**`history_inv`, over `sent`.** For a property of ONE channel's ORDER: an ordered
 journal, increasing sequence numbers. It needs the sequence, so it has to live
 here.
 
-**`extra_w`, over `was_sent`.** For a property that says *some message exists
+**`record_inv`, over `was_sent`.** For a property that says *some message exists
 somewhere else* -- anything relating two channels. `was_sent` only grows, so
 preservation concerns the ONE element just added. `sent` is a map of sequences
 that changes structurally at every send, so the same property stated there means
@@ -457,7 +457,7 @@ parse; write `<NetSM::State<M, Inv>>::do_send(..)`.
 on the parameter.** `Sender`/`Receiver` carry a real `mpsc` channel, so they do.
 
 **Adding a field adds obligations everywhere.** Introducing the allocator meant
-every transition had to re-establish `unallocated`; adding `extra` produced a
+every transition had to re-establish `unallocated`; adding `history_inv` produced a
 third lemma nobody anticipated. Expect one new obligation per transition per
 invariant.
 
@@ -474,7 +474,7 @@ never more.
 
 The two exceptions say what the rule is for. `heartbeat`'s guarantee is about
 **pairs** of messages, and a witness names one message, so `wit_inv` is `true`
-and the guarantee lives in `extra`. `leaselock`'s gate carries the journal
+and the guarantee lives in `history_inv`. `leaselock`'s gate carries the journal
 ordering, which is likewise about pairs. Note that `gate` may read the history
 `s`, which is exactly what `wit_inv` cannot do — the structural reason the two
 sometimes differ.
@@ -502,7 +502,7 @@ either soundness or expressiveness — this was got wrong once and caught.
   service's facts live in tokens no one else can hold. It is not trusted.
 - `wit_inv` is `true` in `heartbeat.rs`. See above.
 - Most of `NetInv`'s proof members are empty in most protocols. When the gate
-  and the guarantee coincide and `extra` is `true`, every one of them is.
+  and the guarantee coincide and `history_inv` is `true`, every one of them is.
 - `lossy.rs` does not implement `DetDelivery`. It cannot, and should not: an
   unreliable link may deliver any index at any time, so a remote call on such a
   link would be unsound. The trait bound is what prevents it.
@@ -537,11 +537,11 @@ receives inside an activity; it is sound today only because of that rule. Adding
 a machine field that is neither owned nor monotone would break it silently, and
 the planned `pstate`/`pfacts` work is exactly where that could happen.
 
-**`extra` is write-only.** A pairwise guarantee can be stated and proved as a
+**`history_inv` is write-only.** A pairwise guarantee can be stated and proved as a
 machine invariant, but `NetSM` exposes only `learn`, `learn_cause` and
-`witness_agree`; there is no way for a service to consume `extra`. Heartbeat's
+`witness_agree`; there is no way for a service to consume `history_inv`. Heartbeat's
 "sequence numbers increase" is proved and unusable from code. The missing piece
-is a `birds_eye` property projecting `extra` to a pure predicate, mirroring
+is a `birds_eye` property projecting `history_inv` to a pure predicate, mirroring
 `cause_gives`.
 
 **`rpc` verifies a program that would not run.** `absorb_handler` consumes the
