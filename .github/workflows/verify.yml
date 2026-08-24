@@ -17,6 +17,9 @@ jobs:
       # Bumping it is a real change and belongs in its own pull request, with
       # the verification counts in README.md updated to match.
       VERUS_VERSION: 0.2026.08.15.7d4628a
+      # Verus is built against one Rust toolchain and refuses to run without
+      # exactly it. Tied to VERUS_VERSION above: bump them together.
+      RUST_TOOLCHAIN: 1.97.1
 
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +41,9 @@ jobs:
           mkdir -p tools
           unzip -q verus.zip -d tools
           rm verus.zip
+
+      - name: Install the Rust toolchain Verus requires
+        run: rustup toolchain install --profile minimal "$RUST_TOOLCHAIN"
 
       - name: Locate the binary
         run: |
