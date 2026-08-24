@@ -68,6 +68,8 @@ impl NetInv<Msg> for PingPong {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Msg>, m: Msg) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Msg) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) -> bool { false }
+    open spec fn cause_gives(c: ChanId, m: Msg) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) { }
     // No cross-channel property to state over the record.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, Msg)>) -> bool { true }

@@ -224,14 +224,20 @@ pub trait NetInv<M> : Sized {
     ///
     /// Defaults to false: a protocol that relates messages on a single channel
     /// says nothing and uses `send` throughout.
-    open spec fn needs_cause(c: ChanId, m: M) -> bool { false }
+    /// NO DEFAULT BODY, deliberately. A default here is worse than merely
+    /// unreliable: at a use site the default can be taken instead of the
+    /// implementation, so every conjunct of a protocol's definition proves
+    /// individually while the definition itself does not. That cost an
+    /// afternoon in `paxos.rs`. A protocol with no cross-channel obligations
+    /// writes `false` and is done.
+    spec fn needs_cause(c: ChanId, m: M) -> bool;
 
     /// Are the messages in `causes` acceptable justification for sending `m` on
     /// `c`? Each element is a channel, a position, and the message sent there.
     ///
     /// A set rather than a single message, because a decision may rest on
     /// several: a coordinator committing needs every vote, not one.
-    open spec fn caused_by(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>) -> bool { false }
+    spec fn caused_by(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>) -> bool;
 
     /// What a thread may conclude about `m` from the fact that a justification
     /// for it exists. This must mention only `c` and `m`: the justifying
@@ -239,7 +245,7 @@ pub trait NetInv<M> : Sized {
     /// anything said about it directly is lost. The point of this predicate is
     /// to carry the content of that existential across, in a form the reader
     /// can use.
-    open spec fn cause_gives(c: ChanId, m: M) -> bool { true }
+    spec fn cause_gives(c: ChanId, m: M) -> bool;
 
     /// A justification really does establish it. The justifying message is
     /// known to satisfy the protocol's guarantee, because everything ever sent

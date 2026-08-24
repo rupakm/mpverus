@@ -84,6 +84,8 @@ impl NetInv<Item> for CollTok {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Item>, m: Item) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Item) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) -> bool { false }
+    open spec fn cause_gives(c: ChanId, m: Item) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) { }
     // No cross-channel property to state over the record.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, Item)>) -> bool { true }

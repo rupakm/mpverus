@@ -28,6 +28,7 @@
 // than in Paxos.
 use vstd::prelude::*;
 use vstd::set_lib::*;
+use vstd::tokens::SetToken;
 use crate::tok::*;
 use crate::proc::*;
 use crate::quorum::*;
@@ -87,7 +88,7 @@ pub open spec fn is_quorum(q: Set<int>) -> bool {
 // Ballots
 // ---------------------------------------------------------------------------
 
-#[derive(Structural, PartialEq, Eq)]
+#[derive(Structural, PartialEq, Eq, Clone, Copy)]
 pub struct Ballot { pub round: u64, pub prop: u64 }
 
 /// Lexicographic, so ballots of distinct proposers are always comparable and
@@ -97,6 +98,19 @@ pub open spec fn blt(x: Ballot, y: Ballot) -> bool {
 }
 
 pub open spec fn ble(x: Ballot, y: Ballot) -> bool { x == y || blt(x, y) }
+
+pub proof fn lemma_ble_trans(x: Ballot, y: Ballot, z: Ballot)
+    requires ble(x, y), ble(y, z),
+    ensures  ble(x, z),
+{
+}
+
+/// The executable comparison, tied to the specification one.
+pub fn ballot_lt(x: Ballot, y: Ballot) -> (r: bool)
+    ensures r == blt(x, y),
+{
+    x.round < y.round || (x.round == y.round && x.prop < y.prop)
+}
 
 // ---------------------------------------------------------------------------
 // Channels
@@ -1287,6 +1301,259 @@ pub proof fn lemma_agreement_same_ballot(
 }
 
 // ---------------------------------------------------------------------------
+// The acceptor, as running code
+//
+// Every gate and every provenance obligation above is discharged HERE, from
+// facts about this service's own fields. That is the point of the exercise: the
+// protocol's conditions turn into an ordinary state invariant on a struct.
+// ---------------------------------------------------------------------------
+
+pub struct Acceptor {
+    pub id: usize,
+    pub prepares:  FanIn<PMsg, Paxos>,    // p1a(p, id), one slot per proposer
+    pub promises:  FanOut<PMsg, Paxos>,   // p1b(p, id)
+    pub accepts:   FanIn<PMsg, Paxos>,    // p2a(p, id)
+    pub accepteds: FanOut<PMsg, Paxos>,   // p2b(p, id)
+    pub log:       Out<PMsg, Paxos>,      // alog(id) -- the one channel it owns alone
+    /// The highest ballot promised, and the last value accepted.
+    pub max_bal: Ballot,
+    pub has_acc: bool,
+    pub acc_bal: Ballot,
+    pub acc_val: u64,
+}
+
+impl Acceptor {
+    pub open spec fn np(&self) -> nat { self.prepares.len() }
+
+    pub open spec fn inv(&self) -> bool {
+        &&& self.prepares.wf() && self.promises.wf()
+        &&& self.accepts.wf() && self.accepteds.wf()
+        &&& self.log.wf() && self.log.id() == alog(self.id as int)
+        &&& self.promises.len() == self.np() && self.accepts.len() == self.np()
+        &&& self.accepteds.len() == self.np() && self.np() > 0
+        &&& self.prepares.ids@  =~= Seq::new(self.np(), |p: int| p1a(p, self.id as int))
+        &&& self.promises.ids@  =~= Seq::new(self.np(), |p: int| p1b(p, self.id as int))
+        &&& self.accepts.ids@   =~= Seq::new(self.np(), |p: int| p2a(p, self.id as int))
+        &&& self.accepteds.ids@ =~= Seq::new(self.np(), |p: int| p2b(p, self.id as int))
+        &&& self.prepares.iid() == self.log.iid()
+        &&& self.promises.iid() == self.log.iid()
+        &&& self.accepts.iid() == self.log.iid()
+        &&& self.accepteds.iid() == self.log.iid()
+        // THE STATE INVARIANT. These three lines are what discharge the gate on
+        // the log at every send below.
+        &&& forall|x: int| 0 <= x < self.log.hist().len() ==> {
+                &&& ((#[trigger] self.log.hist()[x]) is LPromise
+                        ==> ble(self.log.hist()[x]->LPromise_0, self.max_bal))
+                &&& (self.log.hist()[x] is LAccept
+                        ==> self.has_acc && ble(self.log.hist()[x]->LAccept_0, self.acc_bal))
+            }
+        &&& self.has_acc ==> {
+                &&& ble(self.acc_bal, self.max_bal)
+                &&& exists|x: int| 0 <= x < self.log.hist().len()
+                        && #[trigger] self.log.hist()[x]
+                                == PMsg::LAccept(self.acc_bal, self.acc_val)
+            }
+    }
+
+    /// Phase one: answer a Prepare from proposer `k`.
+    pub fn handle_prepare(&mut self, k: usize)
+        requires old(self).inv(), k < old(self).np(),
+        ensures  final(self).inv(), final(self).np() == old(self).np(),
+    {
+        let m = self.prepares.recv(k);
+        match m {
+            PMsg::Prepare(b) => {
+                if ballot_lt(self.max_bal, b) {
+                    let ghost h0 = self.log.hist();
+                    proof {
+                        lemma_p1b_shape(k as int, self.id as int);
+                        lemma_alog_shape(self.id as int);
+                    }
+                    // The log entry. Its gate asks four things, and all four
+                    // are read straight off this struct.
+                    let Tracked(wt) = self.log.send(
+                        PMsg::LPromise(b, self.has_acc, self.acc_bal, self.acc_val));
+                    proof {
+                        // The promise points at the entry just written: same
+                        // acceptor, same content.
+                        assert(self.promises.id(k as int) == p1b(k as int, self.id as int));
+                        let jw = wt.element().1;
+                        assert(wt.element() == (alog(self.id as int), jw,
+                            PMsg::LPromise(b, self.has_acc, self.acc_bal, self.acc_val)));
+                        assert(self.promises.id(k as int).ix[1] == self.id as int);
+                        let tup = (alog(self.promises.id(k as int).ix[1]), jw,
+                                   PMsg::LPromise(b, self.has_acc,
+                                                  self.acc_bal, self.acc_val));
+                        assert(tup == wt.element());
+                        assert(set![wt.element()].contains(tup));
+                        assert(exists|j: nat| set![wt.element()].contains(
+                            (alog(self.promises.id(k as int).ix[1]), j,
+                             PMsg::LPromise(b, self.has_acc, self.acc_bal, self.acc_val))));
+                        assert(!is_p2a(self.promises.id(k as int)));
+                        assert(!is_p2b(self.promises.id(k as int)));
+                        assert(is_p1b(self.promises.id(k as int)));
+                        assert(!is_pdec(self.promises.id(k as int)));
+                        assert(!is_alog(self.promises.id(k as int)));
+                        let mm = PMsg::Promise(b, self.has_acc, self.acc_bal, self.acc_val);
+                        assert(mm->Promise_0 == b);
+                        assert(mm->Promise_1 == self.has_acc);
+                        assert(mm->Promise_2 == self.acc_bal);
+                        assert(mm->Promise_3 == self.acc_val);
+                        assert(exists|j: nat| set![wt.element()].contains(
+                            (alog(self.promises.id(k as int).ix[1]), j,
+                             PMsg::LPromise(mm->Promise_0, mm->Promise_1,
+                                            mm->Promise_2, mm->Promise_3))));
+                        assert(!(PMsg::Promise(b, self.has_acc, self.acc_bal,
+                                               self.acc_val) is Decided));
+                    }
+                    assert(<Paxos as NetInv<PMsg>>::caused_by(
+                        self.promises.id(k as int),
+                        PMsg::Promise(b, self.has_acc, self.acc_bal, self.acc_val),
+                        set![wt.element()]));
+                    // The promise itself, pointing at that entry.
+                    self.promises.send_caused(k,
+                        PMsg::Promise(b, self.has_acc, self.acc_bal, self.acc_val),
+                        Tracked(&wt));
+                    self.max_bal = b;
+                    assert forall|x: int| 0 <= x < self.log.hist().len() implies {
+                        &&& ((#[trigger] self.log.hist()[x]) is LPromise
+                                ==> ble(self.log.hist()[x]->LPromise_0, self.max_bal))
+                        &&& (self.log.hist()[x] is LAccept
+                                ==> self.has_acc
+                                    && ble(self.log.hist()[x]->LAccept_0, self.acc_bal))
+                    } by {
+                        if x < h0.len() { assert(self.log.hist()[x] == h0[x]); }
+                    }
+                    assert(self.has_acc ==> exists|x: int|
+                        0 <= x < self.log.hist().len()
+                        && #[trigger] self.log.hist()[x]
+                                == PMsg::LAccept(self.acc_bal, self.acc_val)) by {
+                        if self.has_acc {
+                            let x0 = choose|x: int| 0 <= x < h0.len()
+                                && h0[x] == PMsg::LAccept(self.acc_bal, self.acc_val);
+                            assert(self.log.hist()[x0] == h0[x0]);
+                        }
+                    }
+                }
+            }
+            // The request channel carries only Prepares.
+            _ => { proof { assert(false); } }
+        }
+    }
+
+    /// Phase two: answer an Accept from proposer `k`.
+    ///
+    /// Two witnesses are needed here: the `Accept` that arrived justifies the
+    /// log entry, and the log entry AND the `Accept` together justify the
+    /// `Accepted` sent back. That is what `send_general` is for.
+    pub fn handle_accept(&mut self, k: usize)
+        requires old(self).inv(), k < old(self).np(),
+        ensures  final(self).inv(), final(self).np() == old(self).np(),
+    {
+        let (m, Tracked(w_acc)) = self.accepts.recv_wit(k);
+        match m {
+            PMsg::Accept(b, v) => {
+                proof { lemma_ballot_total(b, self.max_bal); }
+                if !ballot_lt(b, self.max_bal) {
+                    let ghost h0 = self.log.hist();
+                    proof {
+                        lemma_chan_shapes(k as int, self.id as int);
+                        lemma_alog_shape(self.id as int);
+                        assert(self.accepts.id(k as int) == p2a(k as int, self.id as int));
+                        assert(ble(self.max_bal, b));
+                        assert forall|x: int| 0 <= x < h0.len()
+                            implies ((#[trigger] h0[x]) is LPromise
+                                ==> ble(h0[x]->LPromise_0, b)) by {
+                            if h0[x] is LPromise {
+                                lemma_ble_trans(h0[x]->LPromise_0, self.max_bal, b);
+                            }
+                        }
+                        // The gate on this channel says the ballot names this
+                        // proposer, which is what makes the cause's channel
+                        // the one the witness came from.
+                        assert(b.prop as int == k as int);
+                        let mm = PMsg::LAccept(b, v);
+                        assert(mm->LAccept_0 == b && mm->LAccept_1 == v);
+                        assert(self.log.id().ix[0] == self.id as int);
+                        assert(w_acc.element() ==
+                            (p2a(mm->LAccept_0.prop as int, self.log.id().ix[0]),
+                             w_acc.element().1,
+                             PMsg::Accept(mm->LAccept_0, mm->LAccept_1)));
+                        let tup2 = (p2a(mm->LAccept_0.prop as int, self.log.id().ix[0]),
+                                    w_acc.element().1,
+                                    PMsg::Accept(mm->LAccept_0, mm->LAccept_1));
+                        assert(set![w_acc.element()].contains(tup2));
+                        assert(exists|j: nat| set![w_acc.element()].contains(
+                            (p2a(mm->LAccept_0.prop as int, self.log.id().ix[0]), j,
+                             PMsg::Accept(mm->LAccept_0, mm->LAccept_1))));
+                    }
+                    let Tracked(w_log) = self.log.send_caused(
+                        PMsg::LAccept(b, v), Tracked(&w_acc));
+
+                    let tracked cs;
+                    proof {
+                        let tracked mut acc = SetToken::empty(self.log.inst@.id());
+                        acc.insert(w_acc);
+                        acc.insert(w_log);
+                        cs = acc;
+                        assert(cs.set() =~= set![w_acc.element(), w_log.element()]);
+                        let mm = PMsg::Accepted(b, v);
+                        assert(mm->Accepted_0 == b && mm->Accepted_1 == v);
+                        assert(self.accepteds.id(k as int) == p2b(k as int, self.id as int));
+                        assert(self.accepteds.id(k as int).ix[0] == k as int);
+                        assert(self.accepteds.id(k as int).ix[1] == self.id as int);
+                        assert(cs.set().contains(w_acc.element()));
+                        assert(cs.set().contains(w_log.element()));
+                        assert(w_acc.element() ==
+                            (p2a(self.accepteds.id(k as int).ix[0],
+                                 self.accepteds.id(k as int).ix[1]),
+                             w_acc.element().1,
+                             PMsg::Accept(mm->Accepted_0, mm->Accepted_1)));
+                        assert(w_log.element() ==
+                            (alog(self.accepteds.id(k as int).ix[1]),
+                             w_log.element().1,
+                             PMsg::LAccept(mm->Accepted_0, mm->Accepted_1)));
+                        assert(exists|j: nat| cs.set().contains(
+                            (p2a(self.accepteds.id(k as int).ix[0],
+                                 self.accepteds.id(k as int).ix[1]), j,
+                             PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
+                        assert(exists|j: nat| cs.set().contains(
+                            (alog(self.accepteds.id(k as int).ix[1]), j,
+                             PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))));
+                    }
+                    self.accepteds.send_general(k, PMsg::Accepted(b, v), Tracked(&cs));
+
+                    self.max_bal = b;
+                    self.has_acc = true;
+                    self.acc_bal = b;
+                    self.acc_val = v;
+
+                    assert forall|x: int| 0 <= x < self.log.hist().len() implies {
+                        &&& ((#[trigger] self.log.hist()[x]) is LPromise
+                                ==> ble(self.log.hist()[x]->LPromise_0, self.max_bal))
+                        &&& (self.log.hist()[x] is LAccept
+                                ==> self.has_acc
+                                    && ble(self.log.hist()[x]->LAccept_0, self.acc_bal))
+                    } by {
+                        if x < h0.len() {
+                            assert(self.log.hist()[x] == h0[x]);
+                            if h0[x] is LPromise {
+                                lemma_ble_trans(h0[x]->LPromise_0, old(self).max_bal, b);
+                            }
+                            if h0[x] is LAccept {
+                                lemma_ble_trans(h0[x]->LAccept_0, old(self).acc_bal, b);
+                            }
+                        }
+                    }
+                    assert(self.log.hist()[h0.len() as int] == PMsg::LAccept(b, v));
+                }
+            }
+            _ => { proof { assert(false); } }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WHAT IS PROVED
 //
 // AGREEMENT: `lemma_agreement`. Two values chosen -- at any ballots, by any
@@ -1320,9 +1587,26 @@ pub proof fn lemma_agreement_same_ballot(
 // to verify. `lemma_all_is_quorum` rules out the remaining way the theorem
 // could be hollow, which is quorums being impossible.
 //
-// NOT DONE: the services. This file proves the protocol correct; it does not
-// yet contain a `Proposer` or an `Acceptor` written against `proc.rs`. Those
-// would discharge the gates and provenance obligations at each send, which is
-// where the proof meets running code.
+// THE ACCEPTOR IS RUNNING CODE. `handle_prepare` and `handle_accept` are
+// ordinary executable methods, and between them they discharge every gate and
+// every provenance obligation the protocol above imposes on an acceptor --
+// entirely from facts about the service's own fields. The protocol's conditions
+// became a state invariant on a struct, which is the outcome the whole design
+// was aiming at.
+//
+// Two proof-engineering lessons came out of it, both about matching the
+// SYNTACTIC FORM of a definition rather than its meaning:
+//
+//   * state an existential using the same projections the definition uses
+//     (`mm->Promise_0`), not the constructor arguments it was built from;
+//   * bind the tuple you are claiming membership for to a name first, then
+//     assert `contains` of that name, then the existential.
+//
+// Without both, every conjunct of `caused_by` proves individually and the
+// conjunction does not. That is worth knowing before writing the next service.
+//
+// NOT DONE: the proposer. It is harder in one specific way -- it must gather a
+// quorum of promise witnesses in a loop, accumulating a `SetToken`, and prove
+// that the value it picks is the highest report among them.
 
 } // verus!

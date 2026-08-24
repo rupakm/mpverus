@@ -14,7 +14,7 @@
 // primitives in `tok.rs`, and the endpoint invariants are proved, not assumed.
 
 use vstd::prelude::*;
-use vstd::tokens::{InstanceId, MapToken};
+use vstd::tokens::{InstanceId, MapToken, SetToken};
 use crate::tok::*;
 
 verus!{
@@ -141,6 +141,30 @@ impl<M, Inv: DetDelivery<M>> Out<M, Inv> {
     }
 }
 
+impl<M, Inv: NetInv<M>> Out<M, Inv> {
+    /// Send a message justified by SEVERAL earlier ones -- a quorum, say.
+    pub fn send_general(&mut self, m: M,
+                        Tracked(causes): Tracked<&SetToken<(ChanId, nat, M), NetSM::was_sent<M, Inv>>>)
+        -> (w: Tracked<NetSM::was_sent<M, Inv>>)
+        requires
+            old(self).wf(),
+            Inv::gate(old(self).id(), old(self).hist(), m),
+            causes.instance_id() == old(self).iid(),
+            Inv::needs_cause(old(self).id(), m)
+                ==> Inv::caused_by(old(self).id(), m, causes.set()),
+        ensures
+            final(self).wf(),
+            final(self).id() == old(self).id(),
+            final(self).iid() == old(self).iid(),
+            final(self).hist() == old(self).hist().push(m),
+            w@.instance_id() == final(self).iid(),
+            w@.element() == (final(self).id(), old(self).hist().len(), m),
+    {
+        send_general::<M, Inv>(&self.tx, m, Tracked(self.inst.borrow()),
+                               Tracked(self.tok.borrow_mut()), Tracked(causes))
+    }
+}
+
 /// An inbound endpoint. Not duplicable, which is where the single-consumer
 /// discipline comes from.
 pub struct In<#[verifier::reject_recursive_types] M, Inv: NetInv<M>> {
@@ -250,6 +274,73 @@ impl<M, Inv: NetInv<M>> FanOut<M, Inv> {
         requires self.wf(),
         ensures  n == self.len(),
     { self.outs.len() }
+
+    /// Send on slot `k`, justified by one earlier message.
+    pub fn send_caused(&mut self, k: usize, m: M,
+                       Tracked(cause): Tracked<&NetSM::was_sent<M, Inv>>)
+        -> (w: Tracked<NetSM::was_sent<M, Inv>>)
+        requires
+            old(self).wf(),
+            k < old(self).len(),
+            Inv::gate(old(self).id(k as int), old(self).hist(k as int), m),
+            cause.instance_id() == old(self).iid(),
+            Inv::caused_by(old(self).id(k as int), m, set![cause.element()]),
+        ensures
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            final(self).hist(k as int) == old(self).hist(k as int).push(m),
+            w@.instance_id() == final(self).iid(),
+            w@.element() == (final(self).id(k as int), old(self).hist(k as int).len(), m),
+    {
+        let ghost o0 = self.outs@;
+        assert(self.outs@[k as int].wf());
+        let w = self.outs[k].send_caused(m, Tracked(cause));
+        assert forall|j: int| 0 <= j < self.outs@.len() implies {
+            &&& (#[trigger] self.outs@[j]).wf()
+            &&& self.outs@[j].id() == self.ids@[j]
+            &&& self.outs@[j].iid() == self.outs@[0].iid()
+        } by {
+            if j != k as int { assert(self.outs@[j] == o0[j]); }
+            if k as int != 0 { assert(self.outs@[0] == o0[0]); }
+        }
+        w
+    }
+
+    /// Send on slot `k`, justified by several earlier messages.
+    pub fn send_general(&mut self, k: usize, m: M,
+                        Tracked(causes): Tracked<&SetToken<(ChanId, nat, M), NetSM::was_sent<M, Inv>>>)
+        -> (w: Tracked<NetSM::was_sent<M, Inv>>)
+        requires
+            old(self).wf(),
+            k < old(self).len(),
+            Inv::gate(old(self).id(k as int), old(self).hist(k as int), m),
+            causes.instance_id() == old(self).iid(),
+            Inv::needs_cause(old(self).id(k as int), m)
+                ==> Inv::caused_by(old(self).id(k as int), m, causes.set()),
+        ensures
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            final(self).hist(k as int) == old(self).hist(k as int).push(m),
+            w@.instance_id() == final(self).iid(),
+            w@.element() == (final(self).id(k as int), old(self).hist(k as int).len(), m),
+    {
+        let ghost o0 = self.outs@;
+        assert(self.outs@[k as int].wf());
+        let w = self.outs[k].send_general(m, Tracked(causes));
+        assert forall|j: int| 0 <= j < self.outs@.len() implies {
+            &&& (#[trigger] self.outs@[j]).wf()
+            &&& self.outs@[j].id() == self.ids@[j]
+            &&& self.outs@[j].iid() == self.outs@[0].iid()
+        } by {
+            if j != k as int { assert(self.outs@[j] == o0[j]); }
+            if k as int != 0 { assert(self.outs@[0] == o0[0]); }
+        }
+        w
+    }
 
     /// Send on slot `k`. The quantifier is re-established inside.
     pub fn send(&mut self, k: usize, m: M)

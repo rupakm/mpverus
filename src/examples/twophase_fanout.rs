@@ -100,6 +100,8 @@ impl NetInv<FMsg> for TpcfTok {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<FMsg>, m: FMsg) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: FMsg) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: FMsg, causes: Set<(ChanId, nat, FMsg)>) -> bool { false }
+    open spec fn cause_gives(c: ChanId, m: FMsg) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: FMsg, causes: Set<(ChanId, nat, FMsg)>) { }
     // No cross-channel property to state over the record.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, FMsg)>) -> bool { true }

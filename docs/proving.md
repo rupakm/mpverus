@@ -22,7 +22,7 @@ Reading order:
    refinement stack.
 5. `docs/movers.pdf` for the ideas, `docs/plan.md` for what is open.
 
-Current state: 196 verified, 0 errors, no `assume` or `admit`, nine behavioural
+Current state: 222 verified, 0 errors, no `assume` or `admit`, nine behavioural
 `external_body` declarations.
 
 ## Working method
@@ -400,6 +400,34 @@ equality** -- `c == p2b(c.ix[0], c.ix[1])` -- not by picking the name apart
 (`c.fam == 4 && c.ix.len() == 3`). The second does not pin every index, so
 `wit_inv` cannot be instantiated at it, and the guarantee attached to the
 channel is unavailable. This cost a round trip.
+
+## Discharging `caused_by` at a call site
+
+This is the hardest routine obligation in the framework, and the difficulty is
+entirely about matching the SYNTACTIC FORM of the definition rather than its
+meaning. Two rules, both learned the slow way in `paxos.rs`:
+
+**State the existential with the definition's projections.** If `caused_by` is
+written over `m->Promise_0`, assert the existential over `mm->Promise_0`, not
+over the `b` you built `mm` from. Verus will not connect them.
+
+**Bind the tuple first.** Name the tuple you are claiming membership for, assert
+`contains` of that name, and only then assert the existential:
+
+    let tup = (alog(c.ix[1]), jw, PMsg::LPromise(mm->Promise_0, ...));
+    assert(tup == wt.element());
+    assert(set![wt.element()].contains(tup));
+    assert(exists|j: nat| set![wt.element()].contains(...));
+
+The symptom when either is missing is memorable: **every conjunct of `caused_by`
+proves individually and the conjunction does not.** If you see that, it is not a
+logic problem.
+
+**Trait members involved in causes have no default bodies, deliberately.**
+`needs_cause`, `caused_by` and `cause_gives` are required. A default here is
+worse than merely unreliable -- at a use site the default can be taken instead
+of the implementation, producing exactly the symptom above. A protocol with no
+cross-channel obligations writes `false` and is done.
 
 ## Some properties are types, not proofs
 

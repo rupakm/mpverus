@@ -73,6 +73,8 @@ impl NetInv<Pkt> for Lossy {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Pkt>, m: Pkt) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Pkt) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: Pkt, causes: Set<(ChanId, nat, Pkt)>) -> bool { false }
+    open spec fn cause_gives(c: ChanId, m: Pkt) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Pkt, causes: Set<(ChanId, nat, Pkt)>) { }
     // No cross-channel property to state over the record.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, Pkt)>) -> bool { true }

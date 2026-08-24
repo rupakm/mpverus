@@ -66,6 +66,8 @@ impl NetInv<Beat> for HbTok {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Beat>, m: Beat) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Beat) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) -> bool { false }
+    open spec fn cause_gives(c: ChanId, m: Beat) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) { }
 
     // No cross-channel property to state over the record.
