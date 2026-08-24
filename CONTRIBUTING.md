@@ -22,11 +22,19 @@ more useful than the write-up for anyone actually changing code.
 ./verify.sh --run
 ```
 
-must pass. It checks three things, and all three matter:
+must pass. It checks four things, and all four matter:
 
 - the development verifies, with no `assume` and no `admit`;
 - every counterexample is rejected, **and in the declared way**;
+- every file under `spike/` still verifies — they are design experiments rather
+  than part of the development, but `docs/plan.md` cites their results as
+  evidence, so one that stops verifying is a broken claim;
 - the demo compiles and runs, so the verified source is still the running source.
+
+All four set the exit status. An earlier version of the script printed the spike
+results and dropped them, so it reported success while a spike failed — the same
+failure this repository's counterexample suite once had, which is why the rule
+at the top of this file is the rule.
 
 CI runs the same script on a pinned Verus version. Nothing else is checked, and
 nothing else needs to be.

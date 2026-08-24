@@ -11,6 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # This job runs repository-controlled code (verify.sh, and Verus over the
+    # sources) on pull requests, so it gets no more authority than reading the
+    # checkout.
+    permissions:
+      contents: read
+
     env:
       # Pinned deliberately. Verus is under active development and its solver
       # encoding changes; these proofs are known to go through on this version.
@@ -23,6 +29,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Nothing here pushes, and the job runs code from the branch under
+          # review; leaving the token in .git/config would be authority it
+          # never needs.
+          persist-credentials: false
 
       - name: Cache the Verus toolchain
         id: cache-verus
