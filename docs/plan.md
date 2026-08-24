@@ -1437,3 +1437,104 @@ them as the demonstration of the technique.
 - Phase 3: state, on one handler, a postcondition tying its body to a declared
   abstract action. `LockServer::serve_one` is the template, and the handler
   shape is what makes it regular rather than bespoke.
+
+---
+
+# A ladder of protocols towards Paxos
+
+The goal is single-decree Paxos written against these abstractions, with the
+rough edges it exposes treated as the point rather than as an inconvenience.
+Going straight there would conflate several unknowns, so this is a ladder: each
+rung is a small protocol that stresses exactly one thing Paxos needs, and each
+is expected to produce one concrete framework change.
+
+## What Paxos needs, and what is already there
+
+Already available, and not the interesting part:
+
+- Per-acceptor channels, so an acceptor owns its own histories.
+- Ballots as `(round, proposer)`, so distinctness is structural and no global
+  monotonicity of ballot numbers is needed. This is why protocol state in the
+  machine is NOT on the critical path to Paxos.
+- Set-valued provenance: `caused_by` already takes a set of causes, so a message
+  justified by a quorum is expressible.
+
+Not available. Each of these is a rung below.
+
+- **Quorum gathering.** Collecting replies in arrival order while accumulating
+  the set of who has replied, and building a `SetToken` from the witnesses.
+- **Quorum intersection.** Two majorities of a finite set share a member.
+- **A cross-participant invariant preserved at a caused send.** This is the one
+  that will hurt; see the gap below.
+
+## Confirmed gaps
+
+**G1 — `lemma_extra_preserved` cannot see the provenance.** Its signature is
+
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
+        requires Self::extra(sent), Self::gate(c, s, m), ...
+
+so preserving a system-wide invariant at a send may use only the gate, which
+reads one channel. Paxos's safety invariant relates messages on many acceptors'
+channels, and the reason a proposer may send `Accept(b, v)` is precisely the
+quorum of promises it holds witnesses for. Those witnesses are not available
+here. The fix is to pass the causes and their guarantees into this lemma, which
+means splitting it or widening it. Predicted to bite at rung 3.
+
+**G2 — the finite-set lemmas for quorums are not in vstd.** `lemma_len_union`
+and `lemma_len_intersect` are inequalities; the disjoint-union *equality* that
+intersection needs is absent. `spike/quorum.rs` proves it by induction and then
+derives quorum intersection: 3 verified, 0 errors. Roughly 30 lines, and it
+should move into the library.
+
+**G3 — `Inbox` does not carry its channel names.** `FanOut`/`FanIn` do, which is
+what removed the per-slot quantifier friction. Every quorum protocol will hit
+the same friction on the receive side. Small and mechanical.
+
+**G4 — building a `SetToken` inside a loop is untested.** `SetToken::empty` and
+`insert` exist, but accumulating one while relating it to a growing ghost set of
+acceptors has never been done here.
+
+## The rungs
+
+**0. `Inbox` gets `ids`.** Enabling, small, uniform with `FanOut`/`FanIn`.
+
+**1. Quorum acknowledgement.** Broadcast to n, proceed when a majority acks.
+No safety property beyond "a majority really acked, and each ack is vouched
+for". Stresses G3 and G4 and produces a `Quorum` helper: the accumulated
+witnesses plus the ghost set of who they came from.
+
+**2. Reliable broadcast.** Deliver a message only when a quorum has echoed it.
+First real use of set-valued `caused_by` and `send_general`: the delivery is
+justified by the quorum of echoes. Stresses `cause_gives` when the cause is a
+set rather than one message.
+
+**3. Quorum-replicated fencing register.** The lease lock's storage node,
+replicated across n nodes, with a write accepted when a majority accepts it.
+First use of quorum intersection: two writers each hold a majority, so some node
+saw both, which orders them. First cross-participant safety argument, and the
+rung where G1 is expected to bite.
+
+**4. Synod without phase 1, then with it.** A proposer picks a ballot and sends
+`Accept` to all; a value is chosen when a majority accepts. With one proposer
+this is trivially safe. With two it is not, and the failure is the reason phase
+1 exists. Writing the invariant, watching it fail, then adding phase 1 is the
+cheapest way to get the invariant right before the full protocol.
+
+**5. Single-decree Paxos.** Then, if it goes well, multi-decree.
+
+## Deliberately not on this path
+
+**Chandy--Lamport** needs happens-before across channels, which is a different
+axis from quorums and would not help Paxos. It remains the better pilot for the
+protocol-state-in-the-machine work, and the two tracks are independent.
+
+**Phase 3** (tying a body to a declared abstract action) is not needed for
+Paxos's safety proof, only for refining it to a Leslie or TLA specification.
+Worth doing, but it does not block any rung here.
+
+**Inductive sequentialization** was recorded as required for quorum gathering.
+On reflection it is not, for the concrete proof: gathering in arrival order with
+a loop invariant over a growing set of repliers is an ordinary loop invariant.
+It would be needed to state the gathering as ONE abstract action, which is a
+Phase 3 concern. Rung 1 will settle whether that reading is right.
