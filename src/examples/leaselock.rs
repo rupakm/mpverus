@@ -122,10 +122,6 @@ impl NetInv<Msg> for Lease {
         assert(set![(d, j, m2)].contains((acq_rsp(c.ix[0]), j, Msg::Granted(m->Write_0))));
     }
 
-    open spec fn caused_by2(c: ChanId, m: Msg, d1: ChanId, j1: nat, m1: Msg,
-                            d2: ChanId, j2: nat, m2: Msg) -> bool { false }
-    proof fn lemma_caused_by2(c: ChanId, m: Msg, d1: ChanId, j1: nat, m1: Msg,
-                              d2: ChanId, j2: nat, m2: Msg) { }
 
     /// What the storage node gets to conclude: the token in the request was
     /// issued by the server, and so is nonzero. The writer cannot manufacture

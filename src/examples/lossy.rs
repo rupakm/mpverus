@@ -76,10 +76,6 @@ impl NetInv<Pkt> for Lossy {
     open spec fn caused_by(c: ChanId, m: Pkt, causes: Set<(ChanId, nat, Pkt)>) -> bool { false }
     open spec fn caused_by1(c: ChanId, m: Pkt, d: ChanId, j: nat, m2: Pkt) -> bool { false }
     proof fn lemma_caused_by1(c: ChanId, m: Pkt, d: ChanId, j: nat, m2: Pkt) { }
-    open spec fn caused_by2(c: ChanId, m: Pkt, d1: ChanId, j1: nat, m1: Pkt,
-                            d2: ChanId, j2: nat, m2: Pkt) -> bool { false }
-    proof fn lemma_caused_by2(c: ChanId, m: Pkt, d1: ChanId, j1: nat, m1: Pkt,
-                              d2: ChanId, j2: nat, m2: Pkt) { }
 
     open spec fn cause_gives(c: ChanId, m: Pkt) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Pkt, causes: Set<(ChanId, nat, Pkt)>) { }

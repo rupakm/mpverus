@@ -87,10 +87,6 @@ impl NetInv<Item> for CollTok {
     open spec fn caused_by(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) -> bool { false }
     open spec fn caused_by1(c: ChanId, m: Item, d: ChanId, j: nat, m2: Item) -> bool { false }
     proof fn lemma_caused_by1(c: ChanId, m: Item, d: ChanId, j: nat, m2: Item) { }
-    open spec fn caused_by2(c: ChanId, m: Item, d1: ChanId, j1: nat, m1: Item,
-                            d2: ChanId, j2: nat, m2: Item) -> bool { false }
-    proof fn lemma_caused_by2(c: ChanId, m: Item, d1: ChanId, j1: nat, m1: Item,
-                              d2: ChanId, j2: nat, m2: Item) { }
 
     open spec fn cause_gives(c: ChanId, m: Item) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) { }

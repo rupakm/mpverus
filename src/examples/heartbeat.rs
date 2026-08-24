@@ -69,10 +69,6 @@ impl NetInv<Beat> for HbTok {
     open spec fn caused_by(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) -> bool { false }
     open spec fn caused_by1(c: ChanId, m: Beat, d: ChanId, j: nat, m2: Beat) -> bool { false }
     proof fn lemma_caused_by1(c: ChanId, m: Beat, d: ChanId, j: nat, m2: Beat) { }
-    open spec fn caused_by2(c: ChanId, m: Beat, d1: ChanId, j1: nat, m1: Beat,
-                            d2: ChanId, j2: nat, m2: Beat) -> bool { false }
-    proof fn lemma_caused_by2(c: ChanId, m: Beat, d1: ChanId, j1: nat, m1: Beat,
-                              d2: ChanId, j2: nat, m2: Beat) { }
 
     open spec fn cause_gives(c: ChanId, m: Beat) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) { }
