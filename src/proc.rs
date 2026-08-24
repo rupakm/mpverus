@@ -683,7 +683,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
         ensures r == self.len(),
     { self.rxs.len() }
 
-    /// Gather messages from `need` DISTINCT peers, in arrival order.
+    /// Gather messages from `need` DISTINCT peers, first come first served.
     ///
     /// This is the shape a quorum-based service actually wants. Waiting on one
     /// peer at a time makes progress depend on every peer it names; waiting on

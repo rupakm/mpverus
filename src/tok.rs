@@ -844,17 +844,40 @@ pub fn recv_any<M, Inv: NetInv<M>>(
         final(map).map()[rxs[res.0 as int].id()]
             == old(map).map()[rxs[res.0 as int].id()].push(res.1),
 {
-    // No select in std, so poll. A real deployment would use a multi-producer
-    // channel or an async runtime; the proof is indifferent to which.
+    // There is no select in std, so this polls. Two things keep that honest.
+    //
+    // The scan starts at a rotating slot, so a peer that always has something
+    // ready cannot starve the ones after it. Without that, "whichever peer
+    // answers first" would really mean "the lowest-numbered ready peer".
+    //
+    // And the wait backs off. A bare `yield_now` loop polls tens of thousands
+    // of times per millisecond of waiting and buys no latency at all: it just
+    // holds a core. After a short spin -- which is what a reply already in
+    // flight needs -- it sleeps instead, which costs at most the sleep quantum
+    // and nothing else.
+    //
+    // A deployment that cares would use a multi-producer channel carrying the
+    // source index, or an async runtime. The proof is indifferent to which:
+    // the model keeps one history per channel whatever the transport does.
+    let n = rxs.len();
+    let mut start: usize = 0;
+    let mut spins: u32 = 0;
     loop {
-        let mut k: usize = 0;
-        while k < rxs.len() {
+        let mut i: usize = 0;
+        while i < n {
+            let k = if start + i < n { start + i } else { start + i - n };
             match rxs[k].inner.try_recv() {
                 Ok(m) => { return (k, m, Tracked::assume_new()); }
-                Err(_) => { k = k + 1; }
+                Err(_) => { i = i + 1; }
             }
         }
-        std::thread::yield_now();
+        start = if start + 1 < n { start + 1 } else { 0 };
+        if spins < 128 {
+            spins = spins + 1;
+            std::thread::yield_now();
+        } else {
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
     }
 }
 
