@@ -1,0 +1,1861 @@
+% Movers for Message Passing
+%
+% Build:  latexmk -pdf movers.tex      (or: pdflatex movers.tex)
+%
+% Review comments: write  \RM{your note here}  anywhere in the text.
+% They appear inline, in colour, bracketed.  Set \showrmfalse below to hide
+% them all without deleting them.
+%
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{libertinus}
+\usepackage[scaled=0.86]{beramono}
+\usepackage{microtype}
+\usepackage[a4paper,margin=1.15in]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+\usepackage{parskip}
+
+\tcbuselibrary{skins,breakable}
+
+% ---------------------------------------------------------------- colours ---
+\definecolor{accent}{HTML}{1B4D8F}   % structure
+\definecolor{leftmv}{HTML}{0F6E63}   % left movers
+\definecolor{rightmv}{HTML}{9A3A12}  % right movers
+\definecolor{neutralmv}{HTML}{6B5B8A}% non-movers
+\definecolor{rulegrey}{HTML}{C9CFD8}
+\definecolor{sunken}{HTML}{F2F4F7}
+\definecolor{comment}{HTML}{6A737D}
+\definecolor{rmcolor}{HTML}{B3261E}
+
+% ------------------------------------------------------------ RM comments ---
+\newif\ifshowrm \showrmtrue   % <-- \showrmfalse to hide every \RM{...}
+\newcommand{\RM}[1]{%
+  \ifshowrm{\color{rmcolor}\sffamily\small\,[RM: #1]\,}\fi}
+
+  \newcommand{\CLAUDE}[1]{%
+    \ifshowrm{\color{rmcolor}\sffamily\small\,[CLAUDE: #1]\,}\fi}
+% ------------------------------------------------------------------ code ----
+\newcommand{\code}[1]{\texttt{#1}}
+
+\lstdefinelanguage{Verus}{
+  morekeywords={fn,spec,proof,exec,open,closed,uninterp,pub,struct,enum,impl,trait,
+    type,let,mut,ghost,tracked,requires,ensures,invariant,decreases,assert,assume,
+    forall,exists,choose,match,if,else,while,loop,return,as,int,nat,bool,true,false,
+    Self,self,use,mod,where,is,in,broadcast},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+}
+\lstset{
+  language=Verus,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{accent},
+  commentstyle=\color{comment}\itshape,
+  stringstyle=\color{leftmv},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  breaklines=true,
+  breakatwhitespace=true,
+  frame=single,
+  rulecolor=\color{rulegrey},
+  framesep=6pt,
+  backgroundcolor=\color{sunken},
+  xleftmargin=0pt,
+  aboveskip=1.1em,
+  belowskip=0.6em,
+  captionpos=b,
+  abovecaptionskip=4pt,
+}
+% caption above the listing, in the style of a figure label
+\newcommand{\srcname}[1]{%
+  \vspace{0.9em}\noindent{\sffamily\scriptsize\color{comment}\MakeUppercase{#1}}\par
+  \vspace{-0.7em}}
+
+% ------------------------------------------------------------ proof rules ---
+\newtcolorbox{prooframe}[1]{
+  enhanced, breakable,
+  colback=white, colframe=rulegrey,
+  boxrule=0.4pt, leftrule=2pt,
+  borderline west={2pt}{0pt}{accent},
+  arc=1pt, left=8pt, right=8pt, top=6pt, bottom=6pt,
+  title={}, coltitle=black,
+  before upper={\noindent{\ttfamily\scriptsize\color{accent}\textbf{#1}}\par\vspace{3pt}},
+}
+\newcommand{\reify}[1]{%
+  \par\vspace{4pt}\noindent\textcolor{rulegrey}{\rule{\linewidth}{0.4pt}}\par
+  \vspace{2pt}{\small\color{comment}#1}}
+
+% ----------------------------------------------------------- trace strips ---
+\newcommand{\chipR}[1]{\fcolorbox{rightmv}{white}{\color{rightmv}\ttfamily\scriptsize\vphantom{Ay}#1}}
+\newcommand{\chipL}[1]{\fcolorbox{leftmv}{white}{\color{leftmv}\ttfamily\scriptsize\vphantom{Ay}#1}}
+\newcommand{\chipN}[1]{\fcolorbox{neutralmv}{white}{\color{neutralmv}\ttfamily\scriptsize\vphantom{Ay}#1}}
+\newenvironment{trace}
+  {\par\vspace{0.7em}\noindent\hspace*{\fill}}
+  {\hspace*{\fill}\par\vspace{0.7em}}
+
+% ------------------------------------------------------------- structure ----
+\usepackage{titlesec}
+\titleformat{\section}{\sffamily\large\bfseries\color{black}}{\color{accent}\thesection}{0.7em}{}
+\titleformat{\subsection}{\sffamily\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{1.8em}{0.6em}
+
+\newcommand{\eyebrow}[1]{{\sffamily\scriptsize\color{accent}\MakeUppercase{#1}}\par\vspace{0.4em}}
+
+\title{\vspace{-2.2em}\sffamily\bfseries Verifying Distributed Message Passing Protocols in Rust\vspace{-0.5em}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.5em}
+
+\noindent{\large How to prove a message-passing protocol by reasoning about one thread at a time.}
+
+\vspace{1.2em}
+\noindent\textcolor{rulegrey}{\rule{\linewidth}{0.4pt}}
+
+
+% ===========================================================================
+\section{The Problem}\label{sec:2pc}
+
+We consider programs written in a small message-passing language. A program is a
+fixed set of threads that share no memory and communicate only by passing
+messages over \emph{channels}. A channel is created dynamically and has two
+endpoints: a \emph{sender}, which may be held by several threads at once, and a
+\emph{receiver}, which is held by exactly one. Sending is non-blocking; a thread
+never waits to hand a message off. Receiving blocks until a message is
+available.
+
+Which message a receive returns is fixed by the channel's \emph{discipline}. We
+consider two. Under \textsc{fifo}, messages are delivered in the order they were
+sent, and we identify a channel with an ordered pair
+\code{(source, destination)}, so a \textsc{fifo} channel has a single sender.
+Under \textsc{bag}, a channel is an unordered pool and a receive returns any
+message that has not yet been consumed; many threads may send on it.
+
+We assume a Rust library that provides exactly this, and that the library itself
+has been verified, so that its specification may be taken as given. On top of
+it we also assume a verified \code{rpc} primitive, since request/response is the
+dominant pattern in practice and we would like protocol code to use it directly.
+Section~\ref{sec:rpc} shows how \code{rpc} is built and verified from the
+message-passing operations; Section~\ref{sec:assumed} lists precisely what
+remains assumed.
+
+The question this note answers is: given such a library, how do we verify a
+\emph{protocol} written on top of it?
+
+As a running example, consider the two-phase commit protocol written on top of our message-passing
+library. A
+coordinator asks each participant whether it can commit; if every answer is yes,
+it commits.
+
+\srcname{Two-phase commit in Rust, abridged}
+\begin{lstlisting}
+// Coordinator
+fn coordinator(peers: &[Peer]) -> bool {
+    let mut all_yes = true;
+    for p in peers {
+        p.req.send(Prepare);              // nonblocking
+        match p.rsp.recv() {              // blocks
+            Vote(true)  => {}
+            _           => all_yes = false,
+        }
+    }
+    for p in peers { p.req.send(Decide(all_yes)); }
+    all_yes
+}
+
+// Participant
+fn participant(rx: Receiver<Msg>, tx: Sender<Msg>, vote: bool) {
+    loop {
+        match rx.recv() {                 // blocks
+            Prepare   => tx.send(Vote(vote)),   // nonblocking
+            Decide(b) => commit_or_abort(b),
+            _         => {}
+        }
+    }
+}
+\end{lstlisting}
+
+Both phases of the protocol reach a participant on the same channel, so a single
+receive serves both: the participant does not know, before it looks, whether the
+message in front of it is a request to vote or the announcement of the outcome.
+That is worth noticing because it fixes how many interference points the
+participant has. It has one per loop iteration --- the receive --- and not one
+per protocol phase. The verified version in \code{src/twophase.rs} has exactly
+this shape.
+
+That receive does carry a proof obligation --- a \emph{yield invariant}, in the
+sense of Section~\ref{sec:yield}, which the participant may assume when it wakes
+up and must preserve at each of its own steps. For two-phase commit at this
+level of abstraction the obligation is discharged trivially, because the
+property we are after is a property of what is on the reply channels, and the
+participant only ever appends to them. Section~\ref{sec:fanout} shows a version
+of the same protocol whose yield invariant is not trivial, and
+Section~\ref{sec:cr} one where establishing it is most of the work.
+
+The property we want is:
+
+\begin{quote}
+If the coordinator commits, then every participant voted yes.
+\end{quote}
+
+Proving it directly in a verifier like Verus is quite complicated.
+The coordinator and every participant run concurrently, so the proof must characterize every
+state reachable under every interleaving of messages. An inductive invariant has to
+describe, for an arbitrary point in the execution, which requests are in flight,
+which have been consumed, which replies exist but have not yet been read, and
+how those sets relate to the coordinator's loop counter. None of that appears in
+the programmer's own reasoning, which is closer to:
+
+\begin{quote}
+The coordinator asks each participant in turn --- the order does not matter ---
+and each participant answers with its own vote. When every answer is in, the
+coordinator decides.
+\end{quote}
+
+The informal argument works for the following (informal) reasons.
+First, the coordinator treats
+\code{send} followed by \code{recv} as though it were an ordinary function call:
+nothing observable happens in between. Second, the order in which unrelated
+participants are asked does not matter.
+Thus, correctness is based on sequential reasoning on the coordinator, with atomic
+and independent calls to each participant.
+
+The methodology described here is a way
+to make both of those claims into checked proof obligations, so that the
+resulting proof looks like the informal argument rather than like a case
+analysis over interleavings.
+
+% ===========================================================================
+\section{Overview: Compositional verification}\label{sec:comp}
+
+Before introducing our techniques, it is worth outlining how we verify concurrent 
+software and what the difficulties are. 
+We focus on safety properties, which are properties that must hold in every reachable state of the program.
+The basic technique to prove safety properties is to find an inductive invariant, 
+which is a property that holds in the initial state and is preserved by every step of the program.
+The issue with concurrent programs is that the program's state space is huge, 
+because it includes all possible interleavings of the threads.
+A ``global'' invariant that describes the entire program state is often too complex to find or reason about:
+it has to maintain the global state of all threads and the shared resources and this is usually complex.
+
+Instead, we look for \emph{compositional} approaches.
+A compositional approach allows us to reason about individual threads in isolation, 
+and then combine those proofs to conclude properties about the whole program.
+
+
+\subsection*{Owicki--Gries Reasoning}
+
+The classical way to verify a concurrent program compositionally is to annotate
+each thread with an assertion at every program point, as if it ran alone, and
+add additional checks that ensure that the assertions remain valid under the
+behavior of every other concurrently running thread. 
+Then, we verify two different proof obligations:
+
+\begin{itemize}[leftmargin=1.2em,itemsep=2pt,topsep=3pt]
+\item \textbf{Sequential correctness.} Each thread's annotation is a valid
+  Hoare-style proof of that thread in isolation.
+\item \textbf{Non-interference.} Every assertion in every thread remains true under every
+  atomic step of every other thread.
+\end{itemize}
+
+The second family typically leads to many checks. It has one obligation per
+(assertion, foreign atomic step) pair, so it grows with the product of the
+program sizes, and the assertions have to be phrased finely enough to be
+preserved by whatever another thread might do next. 
+For a protocol, this means reasoning about the network at the granularity of individual sends and receives.
+
+One can simplify the form of the assertions by using a \emph{yield invariant}, 
+which is a single predicate that every thread may assume at an interference point 
+and must preserve at each of its own steps.
+
+\subsection*{Ingredient 1: yield invariants}
+
+A \emph{yield invariant} is a predicate over the shared state. Each
+thread may assume it as a safe approximation of all concurrent activity in the program
+on arrival at an interference point and must establish
+that its own actions preserve the yield invariant.
+The obligation is:
+
+\begin{prooframe}{NON-INTERFERENCE}
+Every atomic action of the program preserves the yield invariant.
+\reify{One obligation per action of the protocol, rather than one per
+(assertion, foreign step) pair.}
+\end{prooframe}
+
+The price is that the invariant must be strong enough to carry everything a
+thread needs across an interference point, and weak enough that every action
+preserves it. Choosing it well is the main creative act in these proofs; much of
+Section~\ref{sec:net} is about picking a representation of the network that
+makes such invariants easy to state and cheap to preserve.
+
+\medskip
+
+In principle, we should put yield invariants between any two atomic operations of each thread
+since other threads may interleave at those points and change the shared state.
+But we can often reduce the number of 
+non-interference checks using a combination of two additional ingredients: 
+reduction and refinement layers.
+
+The idea of reduction is that some interleavings are redundant: 
+they can be rearranged into an equivalent execution that ``moves'' a sequence of actions
+of one thread next to each other and treats them as a single atomic action.
+In this case, we do not need to put a yield invariant between those actions, 
+since they are treated as a single atomic action without losing any generality.
+
+
+
+
+
+\subsection*{Ingredient 2: reduction, via movers}
+
+Lipton's insight is that the organization of a sequence of actions into a coarser
+atomic block can be decided per action. An action is a
+\emph{right mover} if, whenever it is immediately followed by an action of
+another thread, the two can be swapped without changing the outcome; and a
+\emph{left mover} if it can be swapped with an immediately preceding action of
+another thread. 
+
+In our setting, each thread works on its own local state and communicates by sending or receiving
+messages.
+Clearly, local computation in one thread 
+does not interfere with other threads, 
+so we can treat a sequence of local computation as a single atomic action.
+Moreover, sending a message does not interfere with other threads; in particular,
+sending enables other threads to receive that message, but it does not disable any other action.
+Conversely, receiving a message does not interfere with other threads; it disables some actions, 
+but it does not enable any other action.
+In Lipton's terminology, sending is a left mover and receiving is a right mover.
+Thus, a handler that receives a message, performs some local computation, and sends a reply has the shape
+\chipR{recv}\,$\cdot$\,\chipN{compute}$\cdot$\,\chipL{send}
+and can be treated as a single atomic action.
+
+The reduction rule states the following:
+
+\begin{prooframe}{REDUCE}
+If a thread executes a sequence of actions consisting of zero or more right
+movers, then at most one arbitrary action, then zero or more left movers, that
+whole sequence may be treated as a \emph{single atomic action}.
+\reify{Nothing in the executable code changes. What changes is where the proof
+must consider interference: only between such blocks, not inside them.}
+\end{prooframe}
+
+Concretely, a thread that runs \chipR{recv}\,$\cdot$\,\chipN{compute}\,%
+$\cdot$\,\chipL{send} could be intercepted before or after each action.
+But reduction allows us to treat the whole sequence as a single atomic action, 
+so we only have to consider interference before the receive and after the send.
+This corresponds to our initial intuition that each participant is an atomic function call 
+from the coordinator's point of view and we do not have to interleave between the receive and the send.
+
+
+
+\subsection*{Ingredient 3: refinement layers}
+
+The third ingredient attacks detail rather than interleaving. A \emph{layer} is
+a complete program with its own set of atomic actions. A concrete layer
+\emph{refines} an abstract one when every step of the concrete program is
+matched by a step of the abstract program:
+
+\begin{prooframe}{REFINE}
+If the concrete layer refines the abstract layer, then any safety property
+proved of the abstract layer holds of the concrete one.
+\reify{The abstract layer's actions are typically coarser and nondeterministic:
+they say \emph{that} something happened without saying exactly what. Callers
+reason with the abstraction; the refinement obligation is discharged once.}
+\end{prooframe}
+
+Layers compose, so a realistic implementation can be connected to an obviously
+correct specification through a chain of small steps rather than one large one.
+
+\subsection*{The mechanism: ownership and tokenized state machines}
+
+The three ingredients above are classical. What decides how expensive they are
+is a representation choice: how the shared state is written down, and who is
+entitled to change it.
+
+The choice made here is to divide the state rather than share it. A
+\emph{tokenized state machine} is a declaration of a transition system whose
+state is split into named pieces. For each piece the Verus library generates a
+\emph{token} type: a proof-mode value subject to Rust's ownership rules. A
+thread may read or change a piece only by presenting the corresponding token,
+and the declaration's invariants are proved inductive over its transitions once
+and for all.
+
+Two kinds of piece matter here.
+
+\begin{itemize}[leftmargin=1.2em,itemsep=3pt,topsep=3pt]
+\item An \textbf{exclusive} piece has one token, which cannot be duplicated. A
+  thread holding it knows that no other thread can change that piece --- not
+  because an invariant says so, but because the permission to change it is the
+  token, and the thread has it.
+\item A \textbf{persistent} piece has duplicable tokens that are never
+  retracted. A fact recorded there is public and permanent, so it can be handed
+  to another thread and will not become stale.
+\end{itemize}
+
+This is what makes the three ingredients cheap in what follows.
+Non-interference for an exclusively owned piece needs no argument, because
+interference on it is impossible. The mover conditions of
+Section~\ref{sec:movers} become properties of the \emph{shape} of an operation
+rather than claims about a particular protocol. And the invariant a thread must
+carry across an interference point shrinks to what is genuinely shared, which
+here is the record of what has been sent.
+
+The price is that the state has to be divisible in the first place: the design
+of Section~\ref{sec:net} is mostly the work of choosing a division under which
+the facts a protocol needs are facts about pieces someone owns.
+
+The code from here on is Rust with Verus annotations.
+Appendix~\ref{sec:verus} collects the notation, including the syntax of a
+tokenized state machine and a small self-contained example; a reader who knows
+Rust but not Verus may want to read it first.
+
+\subsection*{How they fit together here}
+
+Reduction makes the atomic blocks in a protocol coarse enough that a thread's
+code between two interference points looks like straight-line sequential code.
+Yield invariants discharge what is left. Refinement layers let a component ---
+in our case, a whole remote procedure call --- be replaced by a single action,
+so its caller never sees the messages at all. Applied to two-phase commit, the
+result is that the coordinator is verified as an ordinary sequential program
+with an ordinary loop invariant, which is where we will arrive in
+Section~\ref{sec:rpc}.
+
+% ===========================================================================
+\section{Modeling the network}\label{sec:net}
+
+As a program executes, messages are sent and received. The ``shared state'' of a
+message-passing program is the state of the network, and a proof of correctness
+has to reason about it. How should it be represented?
+
+The first question is not what to store but \emph{who owns it}. A single global
+object holding the whole network is the obvious choice and the expensive one:
+every invariant mentioning it must be re-established after every step of every
+thread, and every fact a thread wants to carry across an interference point must
+be re-derived from an explicit account of what other threads might have done.
+That account is exactly the non-interference obligation of
+Section~\ref{sec:comp}, and it reappears at every program point.
+
+Instead we divide the network into pieces and give each piece an owner. The
+representation has three parts, and each is chosen so that a fact about it is
+stable for a structural reason rather than a proved one.
+
+\srcname{src/tok.rs --- the three parts of the network state}
+\begin{lstlisting}
+#[sharding(map)]            pub sent:  Map<ChanId, Seq<M>>,
+#[sharding(map)]            pub recvd: Map<ChanId, Seq<M>>,
+#[sharding(persistent_set)] pub was_sent: Set<(ChanId, nat, M)>,
+\end{lstlisting}
+
+\textbf{The send history of a channel is owned by its sender.} Under per-link
+FIFO a channel is identified by a source and a destination, so it has exactly
+one sender. \code{sharding(map)} gives one token per channel, and a token cannot
+be duplicated. A thread holding channel $c$'s \code{sent} token therefore knows
+that nobody else appends to $c$ --- not because an invariant says so, but
+because the permission to append is the token, and the thread has it.
+
+\textbf{The consumption record of a channel is owned by its receiver.} Same
+reasoning, resting on \code{Receiver} not being \code{Clone}.
+
+\textbf{What was sent is public and permanent.} \code{was\_sent} records
+``index $i$ of channel $c$ carries message $m$''. It is \emph{persistent}: its
+tokens are duplicable and are never retracted. This is how a receiver learns
+anything at all about a history it does not own. It cannot read the sender's
+\code{sent} token, and it does not need to: a receive hands back a witness, and
+a witness never goes stale.
+
+The consequence is worth stating plainly, because it removes something that
+would otherwise appear on every page. \emph{There is no environment step.} A
+thread does not describe what other threads may have done and re-derive its
+facts from that description. Facts about channels it owns cannot be disturbed;
+facts about other channels are persistent and cannot be retracted; and the
+protocol's invariant is global and inductive. Nothing has to be re-established
+after an interference point, which is why the code that follows an interference
+point in Section~\ref{sec:yield} is empty.
+
+\subsection*{Naming channels}
+
+Protocols need to know that distinct participants have distinct channels, and
+that a request channel is never a reply channel. If a channel identifier is an
+opaque number these are assumptions. We make them theorems instead by giving
+identifiers structure.
+
+\srcname{src/tok.rs --- channel names}
+\begin{lstlisting}
+pub struct ChanId { pub fam: nat, pub ix: Seq<int> }
+
+pub open spec fn chan(fam: nat, ix: Seq<int>) -> ChanId { ChanId { fam, ix } }
+\end{lstlisting}
+
+A name is a family tag together with indices within that family: requests are
+family $0$, replies family $1$, and the indices say which participant and which
+call. Two names are equal exactly when their tags and indices are, which Verus
+knows without being told. A protocol writes \code{req\_chan(j) = chan(0, seq![j])}
+and \code{rsp\_chan(j,k) = chan(1, seq![j, k])}, and the distinctness facts it
+needs follow by two small injectivity lemmas proved once in the library.
+
+% ===========================================================================
+\section{Movers, and why they need no annotation}\label{sec:movers}
+
+This section comes before the first protocol because of what it does
+\emph{not} produce: a protocol author writes no mover annotations, declares no
+footprints, and proves no commutativity obligations. That is worth explaining
+before the reader meets a protocol declaration and wonders what is missing from
+it.
+
+Reduction rests on Lipton's mover types. An action is a \emph{right mover} if it
+commutes with any action of another thread that follows it, and a \emph{left
+mover} if it commutes with any action of another thread that precedes it. A
+sequence of actions executed by one thread that has the shape
+
+\begin{trace}
+\chipR{right movers}\;$\cdot$\;\chipN{one non-mover}\;$\cdot$\;\chipL{left movers}
+\end{trace}
+
+can be treated as a single atomic action: any interleaved execution can be
+permuted into one in which the whole sequence runs uninterrupted.
+
+For channels the assignment is forced, and it is the opposite of what one might
+first guess.
+
+\begin{prooframe}{SEND-L}
+\textbf{\code{send} is a left mover.} Appending to a channel only ever
+\emph{enables} other actions, never disables one, so \code{x; send} can always be
+rewritten \code{send; x}. The converse fails: \code{send(m); recv(m)} cannot
+become \code{recv(m); send(m)}, because the message is not there yet.
+\end{prooframe}
+
+\begin{prooframe}{RECV-R}
+\textbf{\code{recv} is a right mover, and it blocks.} A blocking operation
+violates the non-blocking side condition on left movers and can never be a left
+mover. It is therefore the operation at which a thread yields.
+\end{prooframe}
+
+The consequence is the shape of a reduced atomic block:
+
+\begin{trace}
+\chipR{recv}\;$\cdot$\;\chipN{local compute}\;$\cdot$\;\chipL{send}\;$\cdot$\;\chipL{send}
+\end{trace}
+
+which is exactly the shape of an event handler. A handler loop needs one
+interference point per iteration, at the receive, rather than one per channel
+operation. Every protocol in Sections~\ref{sec:pingpong} to~\ref{sec:cr} has this
+shape, and none of them says so anywhere in its text.
+
+\subsection*{Why the mover types are automatic}
+
+In a design where the network is one shared object, \textsc{send-l} is a claim
+about a particular protocol, and it has to be proved for each one: that an
+action reads and writes only within a declared footprint, that its gate is
+preserved by unrelated appends, and that any two actions with disjoint
+footprints commute. That is an obligation per action and, for commutativity, per
+pair of actions.
+
+Under the division of state described in
+Section~\ref{sec:comp} the situation changes, because the two things a send does
+are both invisible to other threads for reasons that have nothing to do with the
+protocol. A send does exactly two things:
+
+\begin{itemize}[leftmargin=1.2em,itemsep=2pt,topsep=3pt]
+\item it changes a token that no other thread can hold, so no other thread's
+  step can observe the change or be affected by it; and
+\item it adds an element to a persistent set. Set union commutes with everything,
+  and a persistent element is never removed, so this can only enable another
+  action, never disable one.
+\end{itemize}
+
+Both bullets are exactly the two halves of \textsc{send-l}: appending cannot
+disable another action, and it cannot be observed by one. Neither mentions the
+protocol, the message, or the channel. The mover type is therefore fixed by the
+\emph{shape} of the operation --- which token it consumes and which field it
+extends --- and is settled once in the library rather than declared per protocol.
+The same holds for \textsc{recv-r}, whose right-moverness comes from the receive
+token being exclusively owned.
+
+That is what \emph{automatic} means here, and it is worth being precise about
+its limits: the reasoning above is a proof about the library's operations, not a
+theorem Verus checks about all executions. What Verus checks is that a protocol
+uses only those operations, and it enforces this by construction, since a thread
+cannot touch a channel whose token it does not hold. What remains assumed is
+Lipton's theorem, below.
+
+This also gives a criterion for gates that can be checked by reading one
+declaration. A gate preserves left-moverness when it mentions only protocol
+constants, persistent facts, or state the thread exclusively owns. A gate that
+mentions another thread's mutable state does not --- an action gated on
+\emph{channel $c$ is empty} would be disabled by an unrelated append, and then
+\code{send} would not be a left mover at all. Such a gate cannot be written
+here: a gate is given the channel it is about and that channel's own history,
+and has no way to name another. What an earlier design had to detect, this one
+cannot express.
+
+\subsection*{What is still assumed}
+
+Lipton's theorem itself. That pairwise commutativity licenses the reordering is
+a statement about all executions of the program, and there is no formal
+execution semantics inside the Rust program to state it against. The two bullets
+above are its side conditions, and they are discharged; the theorem that turns
+them into atomicity is not, and Section~\ref{sec:assumed} says so.
+
+% ===========================================================================
+\section{A first protocol}\label{sec:pingpong}
+
+The smallest protocol that uses every part of the method. Two parties and two
+channels: \emph{A} sends \code{Ping} on the request channel, \emph{B} answers
+with \code{Pong(v)} on the answer channel, and \emph{A} receives the answer and
+knows the payload is well formed. The property we want is that last clause, and
+the thing to watch for is that \emph{A}'s proof of it never mentions \emph{B}.
+The code is \code{src/examples/pingpong.rs}.
+
+\srcname{src/examples/pingpong.rs --- messages and channels}
+\begin{lstlisting}
+pub uninterp spec fn ok(v: u64) -> bool;      // what a good payload is
+
+pub open spec fn ping_chan() -> ChanId { chan(0, seq![]) }
+pub open spec fn pong_chan() -> ChanId { chan(1, seq![]) }
+
+pub enum Msg { Ping, Pong(u64) }
+\end{lstlisting}
+
+The channels are built with \code{chan}, so \code{ping\_chan() != pong\_chan()}
+follows from how they are named rather than being assumed;
+\code{lemma\_chan\_distinct} discharges it.
+
+\subsection*{The property, stated once}
+
+Everything the protocol guarantees is one predicate on a message and the channel
+it was sent on.
+
+\begin{lstlisting}
+pub open spec fn pong_ok(c: ChanId, m: Msg) -> bool {
+    c == pong_chan() ==> (m is Pong && ok(m->Pong_0))
+}
+\end{lstlisting}
+
+An answer is a well-formed \code{Pong}; nothing is claimed about the request
+channel. This predicate will appear twice below, in two roles, and noticing that
+they are the same predicate is most of understanding the method.
+
+\subsection*{The protocol}
+
+A protocol is an implementation of one trait. There is no state machine to
+write: Section~\ref{sec:machine} describes the one every protocol shares.
+
+\srcname{src/examples/pingpong.rs --- the whole specification}
+\begin{lstlisting}
+pub struct PingPong;
+
+impl NetInv<Msg> for PingPong {
+    open spec fn gate(c: ChanId, s: Seq<Msg>, m: Msg) -> bool { pong_ok(c, m) }
+
+    open spec fn wit_inv(c: ChanId, m: Msg) -> bool { pong_ok(c, m) }
+
+    open spec fn deliverable_at(v: Seq<Msg>, i: nat) -> bool { fifo_deliverable(v, i) }
+
+    open spec fn extra(sent: Map<ChanId, Seq<Msg>>) -> bool { true }
+
+    proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Msg>, m: Msg) { }
+    proof fn lemma_extra_init(chans: Set<ChanId>) { }
+    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) { }
+    proof fn lemma_extra_preserved(...) { }
+}
+\end{lstlisting}
+
+Four definitions and four proofs, and the proofs are empty. Taking them in turn:
+
+\textbf{\code{gate}} is the condition under which a send must not \emph{fail}.
+This is Civl's $\rho$, and it is distinct from blocking: a send whose gate does
+not hold is a bug in the program, whereas an operation with no available step
+merely waits. Here, putting a malformed answer on the answer channel is a bug.
+The obligation appears at every call site of \code{send}.
+
+\textbf{\code{wit\_inv}} is what may be concluded about a message that
+\emph{was} sent. This is the yield invariant: a thread arriving at an
+interference point may assume it of anything on any channel. Note that it is
+\code{pong\_ok} again --- the gate says what may be placed on a channel, and the
+invariant says everything there satisfies it. They are one predicate read at two
+moments, which is the usual case and is why
+\code{lemma\_gate\_gives\_inv} is empty. Section~\ref{sec:machine} says what
+happens when they differ.
+
+\textbf{\code{deliverable\_at}} is the delivery discipline: given what has been
+consumed on a channel, which index may arrive next. Per-link FIFO pins it to the
+current length. Section~\ref{sec:unreliable} gives the other case.
+
+\textbf{\code{extra}} is for a guarantee no statement about a single message can
+express --- an ordering \emph{between} messages, say. Most protocols leave it
+\code{true}; Section~\ref{sec:machine} returns to the one that does not.
+
+\subsection*{The two parties}
+
+\srcname{src/examples/pingpong.rs}
+\begin{lstlisting}
+pub fn responder(rx: &Receiver<Msg>, tx: &Sender<Msg>, v: u64, ...)
+    requires ok(v), rx.id@ == ping_chan(), tx.id@ == pong_chan(), ...
+{
+    let _m = recv::<Msg, PingPong>(rx, Tracked(inst), Tracked(rtok));
+    let _w = send::<Msg, PingPong>(tx, Msg::Pong(v), Tracked(inst), Tracked(stok));
+}
+
+pub fn initiator(tx: &Sender<Msg>, rx: &Receiver<Msg>, ...) -> (answer: u64)
+    ensures ok(answer),
+{
+    let _w = send::<Msg, PingPong>(tx, Msg::Ping, Tracked(inst), Tracked(stok));
+    let m = recv_learn::<Msg, PingPong>(rx, Tracked(inst), Tracked(rtok));
+    match m {
+        Msg::Pong(v) => v,
+        Msg::Ping    => { proof { assert(false); } 0 }
+    }
+}
+\end{lstlisting}
+
+Both are ordinary sequential Rust. Three things are worth pointing at.
+
+\textbf{The responder has one interference point.} Its body is a blocking
+receive followed by a send --- \chipR{R}$\,\cdot\,$\chipL{L} in the terms of
+Section~\ref{sec:movers} --- so the two operations form one atomic block and the
+only place another thread runs is at the receive. Nothing in the code says so.
+
+\textbf{The gate obligation appears at the send.} \code{send} requires
+\code{PingPong::gate} of the channel and message, which here reduces to
+\code{ok(v)}, discharged by the responder's precondition. Weaken the gate and
+the protocol's guarantee goes with it; the development includes that experiment.
+
+\textbf{The initiator's proof does not mention the responder.} It sends, yields,
+receives, and concludes \code{ok(answer)}. The step that gets it there is
+\code{recv\_learn}, which receives a message and converts the accompanying
+witness into \code{wit\_inv}. Replacing it with a plain \code{recv} makes the
+postcondition fail. \emph{A} reasons only about what the invariant says of
+anything on that channel.
+
+The \code{Ping} branch proves \code{false}: the invariant says the answer
+channel carries only \code{Pong}s, so receiving a \code{Ping} there cannot
+happen. That branch exists because Rust wants the match to be exhaustive, not
+because the protocol admits it.
+
+Every function that touches the network carries two extra arguments --- the
+state machine instance and the token for the channel it uses --- together with
+preconditions relating them. They are mechanical, and they are the main
+notational cost of the approach.
+
+% ===========================================================================
+\section{The network state machine}\label{sec:machine}
+
+Section~\ref{sec:pingpong} gave the four definitions a protocol supplies and
+said what each means. This section is the other half: the single state machine
+that gives them their meaning. It is ordinary library code, in
+\code{src/tok.rs}, and it is shared by every protocol.
+
+\srcname{src/tok.rs --- the state}
+\begin{lstlisting}
+tokenized_state_machine!{
+    NetSM<M, Inv: NetInv<M>> {
+        fields {
+            #[sharding(map)]            pub sent:  Map<ChanId, Seq<M>>,
+            #[sharding(map)]            pub recvd: Map<ChanId, Seq<M>>,
+            #[sharding(persistent_set)] pub was_sent: Set<(ChanId, nat, M)>,
+            #[sharding(variable)]       pub next: nat,
+            #[sharding(constant)]       pub inv: PhantomData<Inv>,
+        }
+\end{lstlisting}
+
+The first three fields are the representation of Section~\ref{sec:net}:
+\code{sent} and \code{recvd} divided per channel and exclusively owned,
+\code{was\_sent} persistent. \code{next} is the allocator used by \code{mint}
+(Section~\ref{sec:rpc}). The last field carries the protocol as a type
+parameter and holds no information; it is the idiom \code{vstd}'s own
+\code{rwlock} uses for the same purpose.
+
+\subsection*{Where each part of a protocol is used}
+
+\srcname{src/tok.rs --- the transitions}
+\begin{lstlisting}
+transition!{
+    do_send(c: ChanId, s: Seq<M>, m: M) {
+        remove sent -= [c => s];
+        require(Inv::gate(c, s, m));            // the protocol's gate
+        add    sent += [c => s.push(m)];
+        add    was_sent (union)= set { (c, s.len(), m) };
+    }
+}
+
+transition!{
+    do_recv(c: ChanId, r: Seq<M>, i: nat, m: M) {
+        remove recvd -= [c => r];
+        have   was_sent >= set { (c, i, m) };
+        require(Inv::deliverable_at(r, i));     // the protocol's discipline
+        add    recvd += [c => r.push(m)];
+    }
+}
+\end{lstlisting}
+
+The \code{remove} in each says a send consumes the channel's send token and a
+receive its consumption token, so only a channel's sender may send on it and
+only its single consumer may receive. The \code{have} in \code{do\_recv}
+requires a witness for the message being taken: you can only receive what was
+sent, and this is where that is enforced. The two \code{require}s are the only
+places a protocol's own definitions enter.
+
+The invariants are what a thread may assume:
+
+\srcname{src/tok.rs --- the invariants}
+\begin{lstlisting}
+#[invariant]                            // a witness describes the history
+pub spec fn agree(&self) -> bool { ... }
+
+#[invariant]                            // the protocol's guarantee
+pub spec fn protocol_inv(&self) -> bool {
+    forall|c, i, m| self.was_sent.contains((c, i, m)) ==> Inv::wit_inv(c, m)
+}
+
+#[invariant]                            // the protocol's extra guarantee
+pub spec fn protocol_extra(&self) -> bool { Inv::extra(self.sent) }
+
+#[invariant]                            // nothing at or above the counter exists
+pub spec fn unallocated(&self) -> bool { ... }
+\end{lstlisting}
+
+\code{protocol\_inv} is stated over \code{was\_sent}, which only ever grows, so
+no other thread can falsify it: another thread may add a witness but cannot
+remove one, and adding one preserves a claim about all existing witnesses
+provided the new one satisfies it too. That is exactly what the gate guarantees,
+and it is the whole of the proof the machine demands of a send:
+
+\begin{lstlisting}
+#[inductive(do_send)]
+fn do_send_inductive(pre: Self, post: Self, c: ChanId, s: Seq<M>, m: M) {
+    Inv::lemma_gate_gives_inv(c, s, m);
+    Inv::lemma_extra_preserved(pre.sent, c, s, m);
+    ...
+}
+\end{lstlisting}
+
+A protocol's obligations are therefore small and fixed. \code{gate} must be
+strong enough to establish \code{wit\_inv} for the message it admits ---
+immediate when they are the same predicate, which is the usual case. And
+\code{extra} must hold initially and be preserved by a send and by the creation
+of a channel.
+
+Finally, how a thread uses the invariant:
+
+\srcname{src/tok.rs --- reading the invariant off a witness}
+\begin{lstlisting}
+property!{
+    learn(c: ChanId, i: nat, m: M) {
+        have was_sent >= set { (c, i, m) };
+        assert(Inv::wit_inv(c, m));
+    }
+}
+\end{lstlisting}
+
+A \code{property!} changes nothing. It says: hold a witness, and you may
+conclude \code{wit\_inv} of what it names. The \code{assert} is proved from the
+invariant, once, in the library. \code{recv\_learn} is a receive followed by
+this.
+
+\subsection*{When the gate and the guarantee differ}
+
+They coincide whenever the gate constrains the message alone. They cannot
+coincide when a protocol's guarantee is about \emph{pairs} of messages, because
+a witness names one message. \code{heartbeat.rs} is the case: each beat's
+sequence number must exceed every earlier one on the link. Its \code{wit\_inv}
+is \code{true} and the guarantee lives in \code{extra}:
+
+\srcname{src/examples/heartbeat.rs}
+\begin{lstlisting}
+open spec fn gate(c: ChanId, s: Seq<Beat>, m: Beat) -> bool {
+    forall|x: int| 0 <= x < s.len() ==> (#[trigger] s[x]).seq < m.seq
+}
+open spec fn wit_inv(c: ChanId, m: Beat) -> bool { true }
+open spec fn extra(sent: Map<ChanId, Seq<Beat>>) -> bool {
+    sent.dom().contains(link()) ==>
+        forall|x: int, y: int| 0 <= x < y < sent[link()].len()
+            ==> (#[trigger] sent[link()][x]).seq < (#[trigger] sent[link()][y]).seq
+}
+\end{lstlisting}
+
+Note that the gate reads the history \code{s}, which is what \code{wit\_inv}
+cannot do. The three \code{extra} lemmas are then not empty, and they are one of
+the two places in the example protocols where a protocol writes a real proof
+about its own invariant; the other is the journal ordering in
+\code{leaselock.rs}.
+
+All three of these read one channel. A guarantee that relates a message on one
+channel to a message on another is outside what any of them can state, and needs
+the separate mechanism of Section~\ref{sec:provenance}.
+
+\subsection*{What a protocol does not write}
+
+No state machine. No mover annotations, footprints or commutativity obligations
+--- Section~\ref{sec:movers} gave the reason. No description of what other
+threads may do. And no ghost state of its own: \code{sent}, \code{recvd},
+\code{was\_sent} and the allocator are all the network is.
+
+A protocol that needs ghost state beyond that --- a phase counter, a record of
+local decisions --- declares a \emph{separate} state machine for it. The two are
+independent instances, so a token of one cannot affect the other and no
+obligation relates them, exactly as for two protocols sharing a thread
+(Section~\ref{sec:threads}). The case this does not cover is protocol state that
+must be related to network state; that has to live in one machine, and is not
+expressible.
+% ===========================================================================
+\section{Interference points}\label{sec:yield}
+
+\srcname{src/tok.rs}
+\begin{lstlisting}
+pub fn interference_point() { }
+\end{lstlisting}
+
+It takes no ghost state, promises nothing, and is not trusted. Marking a yield
+is documentation, not an obligation, for the reason given at the end of
+Section~\ref{sec:net}: there is nothing to re-establish. The heartbeat example
+makes the point concretely.
+
+\srcname{src/examples/heartbeat.rs}
+\begin{lstlisting}
+pub fn beat_and_wait(tx: &Sender<Beat>, seq: u64, ...)
+    requires
+        forall|x: int| 0 <= x < old(tok).value().len()
+            ==> old(tok).value()[x].seq < seq,
+    ensures
+        final(tok).value().last() == (Beat { seq }),
+{
+    let _w = send::<HbTok>(tx, Beat { seq }, Tracked(inst), Tracked(tok));
+    interference_point();
+    // Nothing to prove here. Nobody else could have appended.
+}
+\end{lstlisting}
+
+The thread still holds the link's \code{sent} token after the yield, so what it
+wrote is still the last thing there. The conclusion is available because the
+permission was never given away.
+
+\subsection*{Where a protocol's definitions are checked}\label{sec:coherence}
+
+A protocol states its gate, its guarantee and its delivery discipline once each,
+and the machine of Section~\ref{sec:machine} is the only thing that reads them.
+There is no second copy to keep consistent: \code{Inv::gate} appears in exactly
+one \code{require}, \code{Inv::deliverable\_at} in one other, and
+\code{Inv::wit\_inv} in one invariant. The obligations relating them ---
+principally that the gate establishes the guarantee --- are the trait's proof
+members, discharged per protocol and checked by the machine's own inductive
+proof.
+
+% ===========================================================================
+\section{Remote procedure calls}\label{sec:rpc}
+
+A thread that makes a request and waits for the answer writes \code{send} then
+\code{recv}. That is a left mover followed by a right mover --- the wrong shape.
+The two cannot be one atomic block, so the caller yields in the middle of what
+it thinks of as a function call, and every invariant it holds must survive that.
+
+The fix is Civl's: strengthen the gate of the receive until the operation cannot
+block. A non-blocking receive is a left mover, and the pair becomes
+\code{L}$\cdot$\code{L}, one block with no interference point inside it.
+
+\begin{prooframe}{RECV-ABS}
+\textbf{A receive whose gate guarantees the message is already present is a left
+mover.} It cannot block, so the non-blocking side condition is satisfied.
+\reify{\code{recv\_abs} in \code{src/tok.rs}. Its executable behaviour is the
+same blocking receive; only the specification is stronger.}
+\end{prooframe}
+
+The gate is a witness. The caller must hold a persistent token saying that the
+reply was sent, at the index it is about to consume.
+
+\srcname{src/tok.rs --- the abstracted receive}
+\begin{lstlisting}
+pub fn recv_abs<T: DetDelivery>(r: &Receiver<T::M>, ..., Tracked(w): Tracked<&T::Wit>)
+    -> (m: T::M)
+    requires
+        w.element().0 == r.id@,
+        T::deliverable_at(old(tok).value(), w.element().1),
+    ensures
+        m == w.element().2,
+\end{lstlisting}
+
+Two things follow that the earlier design had to arrange by other means.
+
+\textbf{Delivery is deterministic without freshness.} The witness names an
+index, and the agreement invariant of Section~\ref{sec:net} says an index
+determines the message. An earlier version needed each call to mint a
+single-use channel and a separate lemma about singleton delivery to know
+\emph{which} message came back. Knowing the index is enough.
+
+\textbf{The requirement is now visible in the type.} \code{recv\_abs} is
+available only for \code{T: DetDelivery}, a protocol that can prove at most one
+index is deliverable at a time. An unreliable link cannot: it may hand back any
+index at any moment. So \code{rpc} is unavailable on such a link, which is
+correct and was previously not enforced anywhere.
+
+\subsection*{Executing the handler at the call site}
+
+Where does the caller's witness come from? From performing the handler's action
+itself. This is Civl's synchronised asynchronous call: a left-moving handler
+whose request has already been sent may be executed at the call site.
+
+\srcname{src/tok.rs}
+\begin{lstlisting}
+pub proof fn absorb_handler<M, Inv: NetInv<M>>(
+    tracked inst: &NetSM::Instance<M, Inv>,
+    tracked reply_cap: NetSM::sent<M, Inv>,
+    reply: M,
+) -> (tracked r: (NetSM::sent<M, Inv>, NetSM::was_sent<M, Inv>))
+{
+    let tracked (a, b) = inst.do_send(reply_cap.key(), reply_cap.value(), reply, reply_cap);
+    (a.get(), b.get())
+}
+\end{lstlisting}
+
+This is a \code{proof fn}, not an axiom. The caller genuinely performs the
+machine's own send transition, using the reply channel's send token, which it
+holds because it created the channel. The obligation that remains --- that the
+caller and the real handler do not \emph{both} send the reply --- is discharged
+by Rust: \code{rpc} takes the reply capability by value and consumes it, because
+a reply channel is used once.
+
+\srcname{src/tok.rs --- the call, verified}
+\begin{lstlisting}
+pub fn rpc<T: DetDelivery>(
+    req_s: &Sender<T::M>, req_m: T::M,
+    rsp_r: &Receiver<T::M>, reply: Ghost<T::M>,
+    Tracked(inst): ..., Tracked(req_tok): ...,
+    Tracked(reply_cap): Tracked<T::Sent>,      // consumed
+    Tracked(rsp_tok): ...,
+) -> (m: T::M)
+    ensures m == reply@,
+{
+    let _w = send::<T>(req_s, req_m, Tracked(inst), Tracked(req_tok));
+    let tracked w2;
+    proof { let tracked (_s, wit) = absorb_handler::<T>(inst, reply_cap, reply@); w2 = wit; }
+    recv_abs::<T>(rsp_r, Tracked(inst), Tracked(rsp_tok), Tracked(&w2))
+}
+\end{lstlisting}
+
+\subsection*{Creating channels}
+
+A caller that mints a reply channel per call needs the channel to be fresh.
+Freshness used to be asserted by the allocator's specification, which nobody
+could check. It is now proved.
+
+\srcname{src/examples/twophase.rs --- the allocator's invariant}
+\begin{lstlisting}
+#[invariant]
+pub spec fn unallocated(&self) -> bool {
+    forall|j: int, k: nat| k >= self.next
+        ==> !self.sent.dom().contains(rsp_chan(j, k)) && ...
+}
+\end{lstlisting}
+
+The allocator is an exclusively owned counter, and the invariant says nothing at
+or above it exists yet. Adding a key to a sharded map carries an obligation that
+the key is absent, and that obligation is discharged from this invariant. The
+library's \code{mint} is then a verified function; the only trusted part is a
+routine that fabricates two endpoint handles for a channel identifier and
+touches no ghost state.
+
+\subsection*{Two-phase commit, written as a sequential program}
+
+\srcname{src/examples/twophase.rs --- the coordinator}
+\begin{lstlisting}
+while i < reqs.len() && all_yes
+    invariant all_yes ==> forall|j: int| 0 <= j < i ==> vote(j),
+{
+    let (reply_tx, reply_rx, Tracked(reply_cap), Tracked(mut reply_rcv)) =
+        mint::<TpcTok>(i, Tracked(inst), Tracked(next_tok));
+    let m = rpc::<TpcTok>(&reqs[i], Msg::Prepare(Ghost(reply_rx.id@)),
+                          &reply_rx, Ghost(Msg::Vote(vote(i as int))), ...);
+    match m { Msg::Vote(b) => if !b { all_yes = false; }, _ => all_yes = false, }
+    i = i + 1;
+}
+\end{lstlisting}
+
+The loop has no interference point: each iteration mints a channel and makes one
+call which, being \code{L}$\cdot$\code{L}, is atomic. The correctness argument
+is the loop invariant, and it is the argument a programmer would give.
+
+% ===========================================================================
+\section{Fan-out two-phase commit}\label{sec:fanout}
+
+The coordinator above asks one participant at a time. A deployed one broadcasts
+and then gathers, stopping early on the first refusal. There is no remote call
+here, so nothing hides the interference: every collect is an interference point,
+and other participants reply while the coordinator is blocked.
+
+\srcname{src/examples/twophase\_fanout.rs --- broadcast, then gather}
+\begin{lstlisting}
+while i < reqs.len() { ... send::<TpcfTok>(&reqs[i], FMsg::Prepare, ...); ... }
+
+while k < rsps.len() && all_yes
+    invariant all_yes ==> forall|j: int| 0 <= j < k ==> vote(j),
+{
+    let (m, w) = recv::<TpcfTok>(&rsps[k], Tracked(inst), Tracked(&mut rtok));
+    proof {
+        TpcfTok::learn(inst, w.borrow());
+        assert(is_rsp(cid, k as int));
+    }
+    match m { FMsg::Vote(b) => if !b { all_yes = false; }, _ => all_yes = false, }
+    k = k + 1;
+}
+\end{lstlisting}
+
+The broadcast loop contains no interference point at all: every operation in it
+is a send, and sends are left movers, so the whole fan-out is one block. The
+gather loop has one per iteration.
+
+What carries the proof is the yield invariant, declared as one line:
+
+\begin{lstlisting}
+wit_inv(c, m) { forall|j: int| is_rsp(c, j) ==> m == FMsg::Vote(vote(j)) }
+\end{lstlisting}
+
+Participant $j$'s reply channel carries nothing but participant $j$'s vote.
+Where the remote-call version learned a participant's vote by executing that
+participant's action, this one learns it from the invariant, through
+\code{learn}. Both prove the same safety property by different routes, which is
+a reasonable illustration of what the two techniques each buy.
+
+\subsection*{What this version still does not do}
+
+It gathers in a fixed order: participant $0$, then $1$, and so on. That is why a
+plain loop invariant suffices. A coordinator that accepts the first $m$ of $n$
+replies in whatever order they arrive needs an induction over the set of
+outstanding replies, which is what inductive sequentialization provides and this
+development does not have.
+
+% ===========================================================================
+\section{Chang--Roberts leader election}\label{sec:cr}
+
+A ring of $n$ nodes with distinct identifiers. Node $i$ receives on link $i-1$
+and sends on link $i$; on receiving a value $v$ it forwards if $v > \code{id}(i)$,
+declares itself leader if $v = \code{id}(i)$, and otherwise drops the message. The
+safety property is that only the node with the maximum identifier can declare
+itself leader.
+
+The interest here is that the invariant is genuinely about the protocol rather
+than about the framework.
+
+\srcname{src/examples/chang\_roberts.rs --- the ring invariant}
+\begin{lstlisting}
+pub open spec fn msg_ok(j: int, m: Elect) -> bool {
+    &&& 0 <= m.origin@ < n_nodes()
+    &&& m.val as int == id(m.origin@)
+    &&& j == (m.origin@ + m.hops@) % n_nodes()
+    &&& forall|k: int| 0 <= k <= m.hops@
+            ==> m.val as int >= id((m.origin@ + k) % n_nodes())
+}
+\end{lstlisting}
+
+A message on link $j$ carries its originator's identifier, has travelled
+\code{hops} steps from that originator, and dominates every node it has passed
+through. \code{origin} and \code{hops} are \code{Ghost}: they exist in the proof
+and are erased from the running program.
+
+A node's whole step is \code{R}$\cdot$\code{N}$\cdot$\code{L}: one blocking
+receive, a comparison, and at most one send. One interference point. When the
+value equals the node's own identifier, the invariant says the message has
+travelled a full circle and dominated everything on the way, which is the safety
+property. The supporting arithmetic --- that a full circle covers every node ---
+is about modular arithmetic and identifiers, and is independent of the framework.
+
+% ===========================================================================
+\section{Facts that span channels}\label{sec:provenance}
+
+Everything a protocol has said so far is confined to one channel. A gate is
+given the history of the channel being written and the message being placed on
+it; \code{wit\_inv} is given even less; \code{extra} ranges over the send
+histories but is established one send at a time, by a thread that holds only the
+channel it is writing. This is what makes the reasoning local, and it is also a
+real limit. Some properties are about a message on one channel and a message on
+another, and no amount of strengthening a gate will express them.
+
+The lease lock is the standard example. It is written in
+\code{src/examples/leaselock.rs} as three kinds of process exchanging
+asynchronous messages: a lock server that hands out increasing lease tokens, one
+per request; a storage node that accepts a write only if its token and sequence
+number strictly exceed every write already accepted, appending accepted writes
+to a journal; and concurrent writers that acquire a lease and then write. Lease
+expiry is modelled by nondeterminism rather than by time. A writer may be
+granted a lease at any moment, so an earlier writer's token can be superseded
+while that writer still believes it holds the lock, and its next write is
+refused. Nothing in the writer's code detects this, which is the situation a
+fencing token exists to handle.
+
+\srcname{src/examples/leaselock.rs --- channels}
+\begin{lstlisting}
+pub open spec fn acq_req(w: int) -> ChanId { chan(0, seq![w]) } // writer  -> server
+pub open spec fn acq_rsp(w: int) -> ChanId { chan(1, seq![w]) } // server  -> writer
+pub open spec fn wr_req(w: int)  -> ChanId { chan(2, seq![w]) } // writer  -> storage
+pub open spec fn wr_rsp(w: int)  -> ChanId { chan(3, seq![w]) } // storage -> writer
+pub open spec fn journal()       -> ChanId { chan(4, seq![]) }  // storage -> the record
+\end{lstlisting}
+
+The safety property proved is write serialization --- the journal is strictly
+ordered by (token, sequence) --- and it is the top-level theorem of the
+corresponding Leslie model. It is deliberately \emph{not} mutual exclusion: two
+writers may simultaneously believe they hold the lease, and the protocol is
+still correct. That part needs nothing new. The fencing check is a gate on
+\code{journal()}, the storage node is the only sender there and so owns that
+history, and the ordering is a fact about state it holds.
+
+What does need something new is the claim that a write's token was issued by the
+server at all. The token arrives on \code{wr\_req(w)}, the grant was sent on
+\code{acq\_rsp(w)}, and a gate on the first cannot see the second. A forged
+token and a real one look identical.
+
+\subsection*{Provenance}
+
+The mechanism is to make a send point at a message already sent elsewhere, and
+to require the sender to hold the witness for it. Since witnesses are obtained
+only by sending or receiving, a participant cannot point at a message it never
+saw. Four definitions carry this, all optional and all defaulting to nothing:
+
+\srcname{src/tok.rs --- the provenance interface}
+\begin{lstlisting}
+// Does sending m on c require pointing at a message sent somewhere else?
+open spec fn needs_cause(c: ChanId, m: M) -> bool { false }
+
+// Are the messages in `causes` acceptable justification for m on c?
+open spec fn caused_by(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>) -> bool { false }
+
+// What a thread may conclude about m from the fact that a justification exists.
+open spec fn cause_gives(c: ChanId, m: M) -> bool { true }
+
+proof fn lemma_cause_gives(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>)
+    requires Self::needs_cause(c, m), Self::caused_by(c, m, causes),
+             forall|e: (ChanId, nat, M)| causes.contains(e) ==> Self::wit_inv(e.0, e.2),
+    ensures  Self::cause_gives(c, m);
+\end{lstlisting}
+
+A message with \code{needs\_cause} cannot go through \code{send}, whose
+precondition denies it. It goes through \code{send\_caused}, which additionally
+takes a witness and checks \code{caused\_by} against the message that witness
+names, or through \code{send\_general}, which takes a whole set of them. There
+is one send transition, and it carries the justification:
+
+\srcname{src/tok.rs --- the transition}
+\begin{lstlisting}
+transition!{
+    do_send(c: ChanId, s: Seq<M>, m: M, causes: Set<(ChanId, nat, M)>) {
+        remove sent -= [c => s];
+        have   was_sent >= (causes);
+        require(Inv::gate(c, s, m));
+        require(Inv::needs_cause(c, m) ==> Inv::caused_by(c, m, causes));
+        add    sent += [c => s.push(m)];
+        add    was_sent (union)= set { (c, s.len(), m) };
+    }
+}
+\end{lstlisting}
+
+The \code{have} is what does the work. It is a guard on a token the sender must
+already own, so the justification cannot be invented. The corresponding
+invariant says every message that needed one has one:
+
+\srcname{src/tok.rs --- the invariant}
+\begin{lstlisting}
+#[invariant]
+pub spec fn provenance(&self) -> bool {
+    forall|c: ChanId, i: nat, m: M|
+        (#[trigger] self.was_sent.contains((c, i, m))) && Inv::needs_cause(c, m)
+            ==> exists|causes: Set<(ChanId, nat, M)>|
+                    causes.subset_of(self.was_sent) && Inv::caused_by(c, m, causes)
+}
+\end{lstlisting}
+
+This is inductive for the same reason the rest of the model is stable under
+interference: \code{was\_sent} only grows. A justification found once cannot be
+removed by a later step of any thread, so a message established as justified
+stays justified.
+
+In the lease lock the definitions read:
+
+\srcname{src/examples/leaselock.rs}
+\begin{lstlisting}
+open spec fn needs_cause(c: ChanId, m: Msg) -> bool {
+    c.fam == 2 && c.ix.len() == 1 && m is Write
+}
+open spec fn caused_by(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) -> bool {
+    exists|j: nat| causes.contains((acq_rsp(c.ix[0]), j, Msg::Granted(m->Write_0)))
+}
+open spec fn cause_gives(c: ChanId, m: Msg) -> bool {
+    Self::needs_cause(c, m) ==> m->Write_0 != 0
+}
+\end{lstlisting}
+
+Note that \code{caused\_by} derives the expected channel from \code{c} rather
+than quantifying over writers. A writer holding some other writer's grant cannot
+use it, because the channel the justification must have come from is determined
+by the channel the write is going out on.
+
+\subsection*{Reading it back}
+
+A thread that receives a write holds a witness for that message and nothing
+else. It recovers the cross-channel fact through a property of the machine:
+
+\srcname{src/tok.rs --- reading provenance off a witness}
+\begin{lstlisting}
+property!{
+    learn_cause(c: ChanId, i: nat, m: M) {
+        have was_sent >= set { (c, i, m) };
+        require(Inv::needs_cause(c, m));
+        birds_eye let ws = pre.was_sent;
+        assert(Inv::cause_gives(c, m)) by {
+            let causes = choose|causes: Set<(ChanId, nat, M)>|
+                causes.subset_of(ws) && Inv::caused_by(c, m, causes);
+            Inv::lemma_cause_gives(c, m, causes);   // (details elided)
+        };
+    }
+}
+\end{lstlisting}
+
+Two things here deserve comment.
+
+The \code{birds\_eye} binding reads the whole record, which no thread owns. That
+is sound only because \code{was\_sent} is monotone, for exactly the reason given
+above; the same binding on \code{sent} would be unsound, since another thread
+can extend a history at any time.
+
+The second is why \code{cause\_gives} exists at all, and it is the part that is
+easy to get wrong. The justifying message is reached by an existential, and the
+record it is quantified over is not something the caller can name. If the
+property concluded \code{exists causes. causes \(\subseteq\) ws \&\& caused\_by(...)}
+directly, then what the caller receives is that statement with the record
+projected out, which for any concrete \code{caused\_by} is trivially satisfiable
+--- one need only choose a \code{d} and \code{m2} of the right shape. The whole
+chain would verify and establish nothing. \code{cause\_gives} is the part that
+survives the projection: a predicate in \code{c} and \code{m} alone, whose proof
+was allowed to use the justification. Its content comes from
+\code{wit\_inv(d, m2)}, available because everything ever sent satisfies the
+protocol's guarantee.
+
+In the lease lock, the server's gate guarantees that an issued token is nonzero,
+so \code{cause\_gives} says a write's token is nonzero --- a fact about the write
+that the writer cannot manufacture. The storage node learns it on receipt, and
+it feeds the gate on \code{journal()}, so the end-to-end statement is that every
+write in the journal carries a token the server actually issued.
+
+Four checks confirm the mechanism is not decorative. A writer that sends
+\code{Write(999, ...)} after being granted a different token fails the
+precondition of \code{send\_caused}; a writer that reaches for plain \code{send}
+fails its \code{!needs\_cause} precondition; a storage node that omits the
+\code{learn\_cause} call can no longer discharge the journal's gate; and
+deleting the call from an otherwise correct proof makes it fail, which is what
+rules out the vacuous version. The first is kept as
+\code{counterexamples/forged\_lease.rs}.
+
+\subsection*{What this does not reach}
+
+Provenance relates a message to \emph{some} earlier message. It does not by
+itself give an ordering between messages sent to different participants, so
+global monotonicity of the server's grants --- that tokens handed to different
+writers increase --- is still not expressible this way. Write serialization does
+not need it, since it follows from the fencing gate alone, and the storage node
+proves that without reference to the server or to any other writer.
+
+% ===========================================================================
+\section{Unreliable links and unordered delivery}\label{sec:unreliable}
+
+Two variations that look similar and are not. It is worth separating them,
+because conflating them costs either soundness or expressiveness.
+
+\begin{itemize}[leftmargin=1.2em,itemsep=3pt,topsep=3pt]
+\item \textbf{Who may send} determines whether a send history can be
+  exclusively owned, and therefore whether \code{send} is a left mover.
+\item \textbf{The delivery discipline} determines what a receiver may be handed.
+  It is a property of the receive side alone.
+\end{itemize}
+
+\subsection*{An unreliable link}
+
+Loss and duplication are of the second kind. A lossy link has one sender and one
+receiver --- it is a datagram link, not a shared mailbox --- so ownership is
+untouched and the entire difference from per-link FIFO is one line:
+
+\begin{lstlisting}
+deliverable(v, i) { true }        // any index, any number of times
+\end{lstlisting}
+
+Loss needs no modelling at all: nothing in this development ever forces a
+delivery, so a message that never arrives leaves its receiver blocked.
+Duplication is the dropped index constraint, and the persistent witness is what
+makes re-delivery expressible --- a witness is duplicable and never retracted,
+so handing the same one back twice is what a duplicating network does.
+
+What survives unchanged is any invariant of the form \emph{everything ever sent
+satisfies $P$}, together with the step from a message in a receiver's hand back
+to the send history. Both are statements about \code{sent}, which duplication
+and loss do not touch. \code{receive\_one} returns \code{ok(p.v)} on an unreliable
+link with no additional work.
+
+What does not survive is counting, and the development demonstrates the
+difference rather than asserting it. The same claim --- that two receives came
+from two distinct sends --- is proved for a FIFO link and rejected for a lossy
+one:
+
+\begin{center}\small
+\begin{tabular}{@{}p{0.46\linewidth}p{0.30\linewidth}p{0.16\linewidth}@{}}
+\toprule
+\textbf{\sffamily\scriptsize\MakeUppercase{Claim}} &
+\textbf{\sffamily\scriptsize\MakeUppercase{Where}} &
+\textbf{\sffamily\scriptsize\MakeUppercase{Outcome}} \\
+\midrule
+two receives come from two distinct sends & \code{heartbeat.rs}, per-link FIFO
+& verifies \\
+\addlinespace
+the same claim, verbatim & \code{counterexamples/}\newline\code{lossy\_counting.rs}
+& rejected \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A protocol that needs the count must re-establish it, by putting sequence
+numbers in its messages and discarding what it has already seen. The obligation
+appears exactly where the argument would otherwise be unsound.
+
+\subsection*{Many producers, one consumer}
+
+Unordered delivery from several senders is of the first kind, and it constrains
+the model rather than the delivery discipline. A single send history with
+several concurrent appenders cannot be exclusively owned, and without exclusive
+ownership \code{send} is not a left mover.
+
+So a bag is modelled as a \emph{family} of channels, one per producer. Each
+producer exclusively owns its own history, ownership and left-moverness are
+restored, and per-producer order is retained --- which a real multi-producer
+channel also retains. ``Any order'' moves to the receive side, where it belongs:
+
+\srcname{src/tok.rs}
+\begin{lstlisting}
+pub fn recv_any<M, Inv: NetInv<M>>(
+    rxs: &Vec<Receiver<M>>, ...,
+    Tracked(map): Tracked<&mut MapToken<ChanId, Seq<M>, NetSM::recvd<M, Inv>>>,
+) -> (res: (usize, M, Tracked<NetSM::was_sent<M, Inv>>))
+\end{lstlisting}
+
+It blocks on a family of channels and reports which one produced a message. The
+consumer in \code{src/examples/collector.rs} takes whatever arrives first, from
+whichever producer, and learns from the yield invariant that it is well formed.
+
+% ===========================================================================
+\section{Several threads in one process}\label{sec:threads}
+
+A thread in this development is not a process; it is a unit of sequential
+control that owns endpoints. A coordinator that spawns one thread per
+participant is ordinary, and needs nothing new.
+
+Sibling threads of one process are, as far as the proof is concerned,
+unrelated threads: each preserves the yield invariant, each tolerates the
+others' interference, and none mentions the others. What has to be arranged is
+not sharing a token but \emph{dividing} one, since ownership is what makes the
+framing facts of Section~\ref{sec:net} available at all.
+
+\srcname{src/examples/multithread.rs --- forking and joining}
+\begin{lstlisting}
+let tracked s0 = sent_map.remove(rsp_chan(0));
+let tracked r0 = recvd_map.remove(req_chan(0));
+
+let h0 = vstd::thread::spawn(move || -> (res: (Tracked<...>, Tracked<...>))
+    ensures res.0@.key() == rsp_chan(0), ...
+    { ... participant_fanout(0, &rx0, &tx0, vote0, ...); (Tracked(ss), Tracked(rr)) });
+
+// ... join, then put the endpoints back:
+proof { sent_map.insert(a.0.get()); recvd_map.insert(a.1.get()); }
+\end{lstlisting}
+
+Removing a token from a map and inserting it again are proved operations of the
+Verus token library, and disjointness holds by construction: what has been
+removed is no longer there. Thread creation needs nothing special either, since
+a token is an ordinary \code{tracked} value and moves into a spawned closure
+like any other value.
+
+Two limitations are worth naming. Sibling threads cannot share a receive
+endpoint, which is the single-consumer discipline applied consistently. And
+threads of one process sharing mutable state \emph{outside} the network --- a
+counter behind a mutex --- is not modelled here at all; that is ordinary
+shared-memory concurrency and is orthogonal to the channel reasoning.
+
+% ===========================================================================
+\section{Layers}\label{sec:layers}
+
+A protocol proved correct against its own state machine is still stated in terms
+of channels and message histories. A specification is usually not: two-phase
+commit, seen from above, is a record of who has voted, and a leader election is
+an outcome. Layered refinement connects the two.
+
+A \emph{layer} is a gated transition system, and nothing more:
+
+\srcname{src/layer.rs}
+\begin{lstlisting}
+pub trait Spec {
+    type S;   type A;   type M;
+    spec fn inv(s: Self::S) -> bool;
+    spec fn gate(a: Self::A, req: Self::M, s: Self::S) -> bool;
+    spec fn step(a: Self::A, req: Self::M, resp: Self::M, s0: Self::S, s1: Self::S) -> bool;
+}
+\end{lstlisting}
+
+It says nothing about networks, so an abstract layer may be stated over whatever
+state is natural for it. A refinement relates two layers:
+
+\srcname{src/layer.rs}
+\begin{lstlisting}
+pub trait Refines<Lo: Spec, Hi: Spec> {
+    spec fn abs_state(s: Lo::S) -> Hi::S;
+    spec fn abs_act(a: Lo::A) -> Option<Hi::A>;    // None: refines skip
+    spec fn abs_msg(m: Lo::M) -> Hi::M;
+
+    proof fn lemma_gate(a, req, s) requires Lo::inv(s), Hi::gate(...) ensures Lo::gate(...);
+    proof fn lemma_step(a, req, resp, s0, s1) requires Lo::inv(s0), Lo::step(...) ensures ...;
+}
+\end{lstlisting}
+
+\code{abs\_state} is an Abadi--Lamport refinement mapping: the two layers may
+differ in state, actions and messages. \code{abs\_act} returning \code{None}
+means the action is invisible from above, which most internal steps of a real
+implementation are. The gate condition is Civl's, and runs in the direction one
+might not expect: the \emph{abstract} action must fail more often, so that
+wherever the abstraction is safe the implementation is.
+
+Both refinement lemmas may assume the concrete invariant, because refinement is
+only ever appealed to at reachable states. This matters in practice. In
+\code{src/examples/layers\_demo.rs} the abstraction retains only the last sequence
+number while the concrete gate speaks of every element of the history; bridging
+the two requires knowing the history is increasing, which is exactly the
+invariant.
+
+\subsection*{The bottom of the stack is derived, not restated}
+
+A stack has to start somewhere, and the tempting thing is to write the bottom
+layer by hand: restate the protocol's gate as \code{gate} and its transition as
+\code{step}. That proves refinement about a \emph{copy} of the protocol, with
+nothing checking that the copy agrees with the protocol the tokens verify.
+
+\srcname{src/layer.rs}
+\begin{lstlisting}
+pub trait Layered<M> : NetInv<M> {
+    type St;
+    spec fn st_inv(s: Self::St) -> bool;
+    spec fn st_send(s0: Self::St, s1: Self::St, c: ChanId, q: Seq<M>, m: M) -> bool;
+    spec fn st_recv(...) -> bool;
+    proof fn lemma_send_gate_st(...);   // the state gate is the machine's own require
+}
+
+impl<M, T: Layered<M>> Spec for BottomLayer<(M, T)> { ... }
+\end{lstlisting}
+
+A protocol names its machine's own state, invariant and transition relations ---
+one line each, pointing at what the state machine library already generated ---
+and \code{BottomLayer<T>} is those. There is no second definition to keep in
+step. Changing the protocol's gate changes the refinement obligation, which is
+the property a hand-written bottom layer does not have.
+
+\subsection*{An expressiveness note}
+
+\code{abs\_act} is a function of the action alone, so an action cannot be visible
+in some states and invisible in others. State-dependent invisibility belongs on
+the abstract side instead, where the abstract transition simply admits the
+identity: \code{HbTop::step} is \emph{the count grows, or nothing changed}.
+\code{None} is for actions that are always internal.
+
+% ===========================================================================
+\section{What is assumed}\label{sec:assumed}
+
+Verus checks that the obligations above are discharged. It does not, and cannot,
+check the reduction theory that makes those obligations sufficient: there is no
+formal execution semantics inside the Rust program to state Lipton's theorem
+against. So the boundary has to be drawn explicitly.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.34\linewidth}p{0.60\linewidth}@{}}
+\toprule
+\textbf{\sffamily\scriptsize\MakeUppercase{Assumed}} &
+\textbf{\sffamily\scriptsize\MakeUppercase{Why}} \\
+\midrule
+\code{send\_general}, \code{recv}, \code{recv\_any}
+& The channel primitives. Their specifications are the state machine's
+  transitions; the runtime that implements them is not verified.
+  \code{send\_general} carries the witnesses for whatever messages the one
+  being sent must point at; \code{send} and \code{send\_caused} are verified
+  wrappers over it, not further assumptions. \\
+\addlinespace
+\code{make\_endpoints}
+& Fabricates two endpoint handles for a channel identifier. Touches no ghost
+  state and is protocol-independent, so creating channels costs no per-protocol
+  assumption. \\
+\addlinespace
+\code{abort\_on\_panicked\_child}
+& Diverges, so any postcondition holds. Used when a spawned thread panics and
+  its tokens are therefore gone. \\
+\addlinespace
+Per-protocol configuration
+& Four small facts, one per protocol: how many participants, nodes or producers
+  there are, and (for the ring) that node identifiers are distinct. \\
+\addlinespace
+Lipton's theorem
+& That pairwise commutativity licenses treating a block as atomic. Its side
+  conditions are discharged (Section~\ref{sec:movers}); the theorem is not. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Nine \code{external\_body} declarations in total. Note what is \emph{not} on the
+list, and was on the corresponding list of an earlier version of this
+development: channel freshness, channel distinctness, the reduction rule for
+executing a handler at the call site, dividing and recombining ownership across
+threads, and the abstracted receive. Each of those is now proved.
+
+The per-protocol residue is worth looking at, because it is small and it is not
+about channels:
+
+\begin{lstlisting}
+twophase, twophase_fanout:   n_parts() >= 0
+collector:                   n_producers() > 0
+chang_roberts:               n_nodes() >= 1, and node identifiers are distinct
+\end{lstlisting}
+
+These are facts about a deployment. Everything a protocol used to assume about
+its own channel naming --- that participants have distinct channels, that a
+request channel is never a reply channel, that a minted channel is fresh --- now
+follows from how names are built.
+
+\subsection*{Where the assumptions could be reduced further}
+
+The remaining reduction assumption is the substantial one. Building a shallow
+trace semantics as specification-level data and proving the reduction theorem
+about it would relocate the trust from \emph{reduction is sound}, a claim about
+all executions, to \emph{these three functions implement this transition
+relation}, which is smaller and reviewable. That is the natural next step, along
+with the inductive rule needed for the quorum-gathering protocols of
+Section~\ref{sec:fanout}.
+
+One obligation is currently discharged by review rather than by the verifier: a
+function body is not tied to a declared action of the protocol. In the earlier
+design this connection was written out by hand for one protocol; carrying it
+over needs the global state that the token representation deliberately hides,
+and is unfinished.
+
+% ===========================================================================
+\section{Summary}\label{sec:summary}
+
+For a reader who wants the short version of what writing a protocol involves:
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=3pt,topsep=3pt]
+\item Declare the message type and the protocol's parameters.
+\item Implement \code{NetInv}: the gate, the guarantee about a message that was
+  sent, the delivery discipline, and --- only for a guarantee no single message
+  can express --- the \code{extra} invariant and its three lemmas. A guarantee
+  that relates messages on \emph{different} channels additionally needs
+  \code{needs\_cause}, \code{caused\_by}, \code{cause\_gives} and one lemma
+  (Section~\ref{sec:provenance}); all four default to saying nothing.
+\item Write the protocol as ordinary sequential Rust, using the library's
+  \code{send} and \code{recv} --- or \code{send\_caused}, where a message must
+  point at another, or \code{send\_general}, where it must point at several ---
+  and passing the state machine instance and the relevant channel token.
+\item Implement \code{DetDelivery} if the protocol makes remote calls, and
+  \code{Layered} if it is to sit at the bottom of a refinement stack.
+\end{enumerate}
+
+There is no mover annotation, no footprint, no commutativity obligation and no
+account of what other threads may do. Those obligations have no counterpart
+here: the facts they used to establish are consequences of who owns what, and
+the mistakes they used to catch cannot be written down.
+
+The cost, stated fairly, is notation. Every function that touches the network
+carries the state machine instance and a channel token, together with
+preconditions relating them. Code that holds many channels moves tokens in and
+out of a map around each operation.
+
+The limit of the approach is that the network is exactly \code{sent},
+\code{recvd}, the record of what was sent, and the allocator. A protocol needing
+ghost state of its own declares a separate state machine, which composes with
+this one at no cost because the two are independent instances. What is not
+expressible is protocol state that must be \emph{related} to network state; that
+would have to live in one machine. Relating messages on different channels to
+each other, which was outside the model in an earlier version of this
+development, is now within it, and at no cost in assumptions: the send
+primitive was generalised rather than duplicated.
+
+% ===========================================================================
+\appendix
+\section{Verus notation}\label{sec:verus}
+
+The development is written in Rust; Verus adds specifications and proofs to Rust
+and discharges them with an SMT solver. This appendix collects what a reader who
+knows Rust but not Verus needs in order to read the code in the body.
+
+\begin{tcolorbox}[colback=sunken,colframe=rulegrey,boxrule=0.4pt,arc=1pt,
+                  left=8pt,right=8pt,top=6pt,bottom=6pt,breakable]
+{\sffamily\scriptsize\color{neutralmv}\MakeUppercase{Verus notation}}
+\par\vspace{5pt}
+\begin{description}[leftmargin=!,labelwidth=6.2em,font=\ttfamily\small,
+                    itemsep=2pt,parsep=0pt,topsep=2pt]
+\item[spec fn] A mathematical function, usable only in specifications. Erased
+  before compilation.
+\item[proof fn] A lemma. Its \code{requires}/\code{ensures} are its statement;
+  its body is its proof. Erased before compilation.
+\item[open spec fn] A specification function that can be called in proofs, but not in executable code.
+The difference between ``open spec fn'' and ``spec fn'' is that the former can be called in 
+proofs, while the latter can only be called in specifications.
+\item[fn] Executable code. This is what actually runs.
+\item[requires\slash ensures] Pre- and postconditions.
+\item[old(x), final(x)] For a parameter passed by mutable reference, its value
+  before and after the call. Both appear in postconditions.
+\item[Ghost<T>] A value of type \code{T} that exists only in the proof and
+  occupies no space at runtime. For a value \code{x} of type \code{Ghost<T>},
+we write \code{x@} to read the underlying value.
+\item[Tracked<T>] Like \code{Ghost}, but subject to Rust's ownership rules: it
+  cannot be duplicated or discarded silently.
+\item[Seq, Set, Map] Mathematical sequences, sets and maps. Unbounded;
+  specification-only.
+\item[\&\&\&, |||] Bulleted conjunction and disjunction, for readable
+  multi-line formulas.
+\item[x->Variant\_0] Projects the first field of an enum variant. Total:
+  applying it to the wrong variant is well-typed and yields an unspecified
+  value.
+\item[uninterp] An uninterpreted specification function: a parameter of the
+  protocol, constrained only by whatever axioms are stated about it.
+\item[external\_body] Marks a function whose body is \emph{not} verified. Its
+  specification is assumed. Every one of these is an axiom.
+\item[tracked x] A proof-mode value subject to ownership: it can be moved and
+  consumed, but not copied.
+\end{description}
+\end{tcolorbox}
+
+One Rust feature matters to the proof rather than to the syntax. Values have
+unique owners, and a value that is not \code{Clone} cannot be duplicated. The
+development gives \code{Receiver} no \code{Clone} implementation, so a receive
+endpoint is owned by exactly one thread, and Rust's type system discharges the
+single-consumer condition the proof needs at no cost. Section~\ref{sec:net}
+applies the same idea to the network state itself.
+
+\subsection*{Tokenized state machines}
+
+The one Verus library the development relies on is
+\code{tokenized\_state\_machine!}. Section~\ref{sec:comp} says why this shape of
+declaration is useful; this appendix says what it looks like and what it
+generates.
+
+The macro takes a transition system whose state is divided into named
+\emph{fields}, each annotated with a \emph{sharding strategy} saying how that
+field is divided among its owners. Here is a complete example: a counter that
+several threads may increment, where each holds a share of the total.
+
+\srcname{a small tokenized state machine}
+\begin{lstlisting}
+tokenized_state_machine!{
+    Counter {
+        fields {
+            #[sharding(variable)] pub total: nat,   // one exclusive token
+            #[sharding(count)]    pub units: nat,   // splittable into shares
+        }
+
+        #[invariant]
+        pub spec fn agree(&self) -> bool { self.total == self.units }
+
+        init!{
+            boot() { init total = 0; init units = 0; }
+        }
+
+        transition!{
+            incr() {
+                update total = pre.total + 1;       // change an exclusive field
+                add    units += (1);                // mint one share
+            }
+        }
+
+        #[inductive(boot)]  fn boot_inductive(post: Self) { }
+        #[inductive(incr)]  fn incr_inductive(pre: Self, post: Self) { }
+    }
+}
+\end{lstlisting}
+
+From this the macro generates:
+
+\begin{itemize}[leftmargin=1.2em,itemsep=3pt,topsep=3pt]
+\item a type \code{Counter::Instance}, identifying one running copy of the
+  machine, together with \code{Instance::boot()}, which returns the instance and
+  \emph{every token of the initial state};
+\item a token type per field --- \code{Counter::total}, \code{Counter::units}
+  --- whose values are \code{tracked}, so they obey Rust's ownership rules;
+\item a proof method per transition, here \code{instance.incr(...)}, which
+  consumes the tokens the transition removes and returns those it adds;
+\item a proof obligation per \code{\#[inductive(..)]} stub, discharged by the
+  bodies above, that the transition preserves every \code{\#[invariant]}.
+\end{itemize}
+
+The strategies used in this development are \code{variable} (a single exclusive
+token for the whole field), \code{map} (one exclusive token per key),
+\code{constant} (a value fixed at initialisation, readable from the instance),
+and \code{persistent\_set} (duplicable tokens that are never retracted). Within
+a transition body:
+
+\begin{center}\small
+\begin{tabular}{@{}p{0.26\linewidth}p{0.68\linewidth}@{}}
+\toprule
+\textbf{\sffamily\scriptsize\MakeUppercase{Clause}} &
+\textbf{\sffamily\scriptsize\MakeUppercase{Meaning}} \\
+\midrule
+\code{require(P)} & The transition may only be taken where \code{P} holds.
+  Whoever performs it must establish \code{P}. \\
+\addlinespace
+\code{remove f -= [k => v]} & Consume the token for key \code{k}, whose value is
+  \code{v}. The performer must hold it. \\
+\addlinespace
+\code{add f += [k => v]} & Produce a token for \code{k}. For a map, this
+  carries an obligation that \code{k} was absent. \\
+\addlinespace
+\code{have f >= \{x\}} & Read a persistent token without consuming it. \\
+\addlinespace
+\code{update f = e} & Change a \code{variable} field. \\
+\addlinespace
+\code{assert(P)} & A proof obligation discharged using the invariants. \\
+\addlinespace
+\code{birds\_eye let x = e} & Bind a value read from the whole state, including
+  fields the performer does not own. The binding is not available to the caller,
+  so only what is proved \emph{without} mentioning it is returned
+  (Section~\ref{sec:provenance}). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A \code{property!} block has the same shape as a transition but changes nothing.
+It is how a thread converts tokens it holds into a consequence of the machine's
+invariants --- the mechanism Section~\ref{sec:yield} uses to read a yield
+invariant off a witness.
+
+Two consequences are worth keeping in mind while reading the body. A thread can
+affect the state only by performing a declared transition, and only if it holds
+the tokens that transition consumes; and the invariants are established once,
+over the declared transitions, rather than re-proved at each use.
+
+\vspace{1.5em}
+\noindent\textcolor{rulegrey}{\rule{\linewidth}{0.4pt}}
+\vspace{0.4em}
+
+{\small\color{comment}
+\noindent\textbf{Sources.} The proof rules are Civl's. See Kragl and Qadeer,
+\emph{The Civl Verifier} (FMCAD 2021); Kragl, Qadeer and Henzinger,
+\emph{Refinement for Structured Concurrent Programs} (CAV 2020); Kragl, Enea,
+Henzinger, Mutluergil and Qadeer, \emph{Inductive Sequentialization of
+Asynchronous Programs} (PLDI 2020); and Gangamreddypalli, Enea and Qadeer,
+\emph{Reduction for Structured Concurrent Programs} (ESOP 2026).
+
+\vspace{0.4em}
+\noindent The library is \code{src/tok.rs} and \code{src/layer.rs}. The
+protocols are in \code{src/examples/}; \code{counterexamples/} holds protocols
+that must fail to verify. Checked with Verus 0.2026.08.15.
+}
+
+\end{document}

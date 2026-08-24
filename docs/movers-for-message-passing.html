@@ -1,0 +1,981 @@
+<title>Movers for Message Passing</title>
+
+<style>
+  :root {
+    --ground:   #F6F7F9;
+    --surface:  #FFFFFF;
+    --sunken:   #EEF1F5;
+    --ink:      #131820;
+    --muted:    #59616E;
+    --rule:     #DCE0E7;
+    --accent:   #1B4D8F;
+    --accent-w: #E7EEF8;
+    --left:     #0F6E63;
+    --right:    #9A3A12;
+    --neutralm: #6B5B8A;
+
+    --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans:  ui-sans-serif, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --mono:  ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --measure: 68ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #0D1015;
+      --surface:  #141922;
+      --sunken:   #10151C;
+      --ink:      #E4E9F0;
+      --muted:    #97A0AE;
+      --rule:     #232A34;
+      --accent:   #86ADEE;
+      --accent-w: #17222F;
+      --left:     #4FCBBD;
+      --right:    #EB9C6E;
+      --neutralm: #B0A0D0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:   #0D1015;
+    --surface:  #141922;
+    --sunken:   #10151C;
+    --ink:      #E4E9F0;
+    --muted:    #97A0AE;
+    --rule:     #232A34;
+    --accent:   #86ADEE;
+    --accent-w: #17222F;
+    --left:     #4FCBBD;
+    --right:    #EB9C6E;
+    --neutralm: #B0A0D0;
+  }
+
+  * { box-sizing: border-box; }
+
+  /* Review annotations: <RM>...</RM> anywhere in the source is hidden in the
+     rendered page, so notes can be left inline without disturbing the layout. */
+  RM, rm { display: none; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.25rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--measure);
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.15rem;
+  }
+
+  /* ---- masthead ---- */
+
+  header.mast {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 4.5rem 0 1.75rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 1.75rem;
+  }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  h1 {
+    font-family: var(--sans);
+    font-size: clamp(2rem, 5.5vw, 2.9rem);
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    font-weight: 680;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: 1.12rem;
+    color: var(--muted);
+    margin: 0;
+    text-wrap: pretty;
+  }
+
+  /* ---- sections ---- */
+
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  h2 {
+    font-family: var(--sans);
+    font-size: 1.32rem;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    font-weight: 660;
+    margin: 2.6rem 0 0;
+    text-wrap: balance;
+    position: relative;
+  }
+
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--accent);
+    font-weight: 500;
+    display: block;
+    margin-bottom: 0.35rem;
+    letter-spacing: 0.04em;
+  }
+
+  @media (min-width: 1080px) {
+    h2 .num {
+      position: absolute;
+      left: -4.5rem;
+      top: 0.42rem;
+      margin: 0;
+      text-align: right;
+      width: 3rem;
+    }
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 1.02rem;
+    font-weight: 640;
+    letter-spacing: -0.005em;
+    margin: 1.2rem 0 0;
+  }
+
+  p { margin: 0; text-wrap: pretty; }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  ul, ol { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: 0.4rem; }
+  li { text-wrap: pretty; }
+
+  strong { font-weight: 640; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.855em;
+    background: var(--sunken);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+
+  /* ---- code blocks ---- */
+
+  figure.code {
+    margin: 0.35rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  figure.code figcaption {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0.55rem 0.9rem;
+    border-bottom: 1px solid var(--rule);
+    background: var(--sunken);
+  }
+
+  figure.code pre {
+    margin: 0;
+    padding: 0.95rem 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.79rem;
+    line-height: 1.58;
+    tab-size: 4;
+  }
+
+  pre .c { color: var(--muted); font-style: italic; }
+  pre .k { color: var(--accent); }
+  pre .hl { background: var(--accent-w); border-radius: 2px; padding: 0 0.15em; }
+
+  /* ---- proof rule blocks ---- */
+
+  .rule-box {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 1rem;
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: var(--surface);
+    padding: 0.95rem 1.05rem;
+  }
+
+  .rule-tag {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    font-weight: 600;
+    padding-top: 0.22rem;
+    white-space: nowrap;
+  }
+
+  .rule-body { display: flex; flex-direction: column; gap: 0.5rem; }
+  .rule-body .statement { font-size: 0.98rem; }
+  .rule-body .reify {
+    font-size: 0.88rem;
+    color: var(--muted);
+    padding-top: 0.45rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .rule-body .reify code { font-size: 0.82em; }
+
+  @media (max-width: 620px) {
+    .rule-box { grid-template-columns: 1fr; gap: 0.5rem; }
+  }
+
+  /* ---- notation asides ---- */
+
+  aside.note {
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--sunken);
+    padding: 0.9rem 1.05rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    font-size: 0.93rem;
+  }
+
+  aside.note .label {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--neutralm);
+    font-weight: 640;
+  }
+
+  aside.note dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 0.9rem;
+    align-items: baseline;
+  }
+  aside.note dt { font-family: var(--mono); font-size: 0.78rem; color: var(--ink); }
+  aside.note dd { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+  @media (max-width: 620px) {
+    aside.note dl { grid-template-columns: 1fr; gap: 0.1rem 0; }
+    aside.note dd { margin-bottom: 0.45rem; }
+  }
+
+  /* ---- trace strips ---- */
+
+  .trace {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--surface);
+    overflow-x: auto;
+  }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    padding: 0.28rem 0.55rem;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .chip.r { color: var(--right); }
+  .chip.l { color: var(--left); }
+  .chip.n { color: var(--neutralm); }
+  .chip.y {
+    color: var(--muted);
+    border-style: dashed;
+    background: var(--sunken);
+  }
+  .arrow { color: var(--muted); font-family: var(--mono); font-size: 0.8rem; }
+
+  .legend {
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem 1.1rem;
+  }
+  .legend b { font-weight: 600; }
+  .legend .lm { color: var(--left); }
+  .legend .rm { color: var(--right); }
+
+  /* ---- table ---- */
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.88rem;
+    background: var(--surface);
+  }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 640;
+    background: var(--sunken);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td code { font-size: 0.8em; background: transparent; padding: 0; }
+
+  /* ---- misc ---- */
+
+  .quote {
+    border-left: 3px solid var(--rule);
+    padding: 0.15rem 0 0.15rem 1.1rem;
+    color: var(--ink);
+    font-size: 1.02rem;
+  }
+
+  hr.div {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 2.2rem 0 0;
+  }
+
+  footer.colophon {
+    margin-top: 3rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <div class="eyebrow">Verifying distributed protocols in Rust</div>
+  <h1>Movers for Message Passing</h1>
+  <p class="standfirst">How to prove a protocol built on channels by reasoning about one thread at a time — porting Civl's reduction, yield invariants, and refinement layers into Rust and Verus.</p>
+</header>
+
+<section>
+  <h2><span class="num">1</span>A protocol, as an engineer would write it</h2>
+
+  <p>Start with a messaging library. Channels are created, messages are sent without blocking, and messages are received by blocking until one arrives. Each receive endpoint belongs to exactly one thread. This is roughly what <code>std::sync::mpsc</code> or a small RPC runtime gives you.</p>
+
+  <p>Here is two-phase commit written on top of it. A coordinator asks each participant whether it can commit; if every answer is yes, it commits.</p>
+
+  <figure class="code">
+    <figcaption>Two-phase commit — the program before any verification</figcaption>
+<pre><span class="c">// Coordinator</span>
+fn coordinator(peers: &amp;[Peer]) -&gt; bool {
+    let mut all_yes = true;
+    for p in peers {
+        p.req.send(Prepare);              <span class="c">// nonblocking</span>
+        match p.rsp.recv() {              <span class="c">// blocks</span>
+            Vote(true)  =&gt; {}
+            _           =&gt; all_yes = false,
+        }
+    }
+    for p in peers { p.req.send(Decide(all_yes)); }
+    all_yes
+}
+
+<span class="c">// Participant</span>
+fn participant(rx: Receiver&lt;Msg&gt;, tx: Sender&lt;Msg&gt;, vote: bool) {
+    loop {
+        let _req = rx.recv();             <span class="c">// blocks</span>
+        tx.send(Vote(vote));              <span class="c">// nonblocking</span>
+    }
+}
+</pre>
+  </figure>
+
+  <p>The property we want is unremarkable:</p>
+
+  <p class="quote">If the coordinator commits, then every participant voted yes.</p>
+
+  <p>Proving it directly is out of proportion to how obvious it is. The coordinator and every participant run concurrently, so the proof must characterize every state reachable under every interleaving. An inductive invariant has to describe, for an arbitrary point in the execution, which requests are in flight, which have been consumed, which replies exist but have not yet been read, and how those sets relate to the coordinator's loop counter. None of that appears in the programmer's own reasoning, which is closer to:</p>
+
+  <p class="quote">The coordinator asks each participant in turn — the order does not matter — and each participant answers with its own vote. When every answer is in, the coordinator decides.</p>
+
+  <p>Two things make that informal argument work. First, the coordinator treats <code>send</code> followed by <code>recv</code> as though it were an ordinary function call: nothing observable happens in between. Second, the order in which unrelated participants are asked does not matter. The methodology described here is a way to make both of those claims into checked proof obligations, so that the resulting proof looks like the informal argument rather than like a case analysis over interleavings.</p>
+
+  <p>The ingredients are Civl's: <em>reduction</em> based on Lipton's movers, <em>yield invariants</em> for the interference that reduction does not remove, and <em>refinement layers</em> for replacing a component by a coarser description of it. What follows is how each one is stated, and how it appears in Rust and Verus.</p>
+</section>
+
+<section>
+  <h2><span class="num">2</span>Reading the code</h2>
+
+  <p>The verified code is Rust, checked by Verus. Verus adds specifications and proofs to Rust and discharges them with an SMT solver. A reader who knows a program verifier but not Rust needs only the following.</p>
+
+  <aside class="note">
+    <div class="label">Verus notation</div>
+    <dl>
+      <dt>spec fn</dt>
+      <dd>A mathematical function, usable only in specifications. Erased before compilation.</dd>
+
+      <dt>proof fn</dt>
+      <dd>A lemma. Its <code>requires</code>/<code>ensures</code> are its statement; its body is its proof. Erased before compilation.</dd>
+
+      <dt>fn</dt>
+      <dd>Executable code. This is what actually runs.</dd>
+
+      <dt>requires / ensures</dt>
+      <dd>Pre- and postconditions.</dd>
+
+      <dt>old(x) / final(x)</dt>
+      <dd>For a parameter passed by mutable reference, its value before and after the call. Both appear in postconditions.</dd>
+
+      <dt>Ghost&lt;T&gt;</dt>
+      <dd>A value of type <code>T</code> that exists only in the proof and occupies no space at runtime. Written <code>x@</code> to read the underlying value.</dd>
+
+      <dt>Tracked&lt;T&gt;</dt>
+      <dd>Like <code>Ghost</code>, but subject to Rust's ownership rules: it cannot be duplicated or discarded silently.</dd>
+
+      <dt>Seq, Set, Map</dt>
+      <dd>Mathematical sequences, sets and maps. Unbounded; specification-only.</dd>
+
+      <dt>&amp;&amp;&amp; / |||</dt>
+      <dd>Bulleted conjunction and disjunction, for readable multi-line formulas.</dd>
+
+      <dt>x-&gt;Variant_0</dt>
+      <dd>Projects the first field of an enum variant. Total: applying it to the wrong variant is well-typed and yields an unspecified value.</dd>
+
+      <dt>external_body</dt>
+      <dd>Marks a function whose body is <em>not</em> verified. Its specification is assumed. Every one of these is an axiom.</dd>
+    </dl>
+  </aside>
+
+  <p>One Rust feature matters to the proof rather than to the syntax. Values have unique owners; a value that is not <code>Clone</code> cannot be duplicated. We give <code>Receiver</code> no <code>Clone</code> implementation, so a receive endpoint is owned by exactly one thread. Rust's type system then discharges the single-consumer condition that the proof needs, at no cost.</p>
+</section>
+
+<section>
+  <h2><span class="num">3</span>The network is a history, not a buffer</h2>
+
+  <p>The first decision is what the proof says about the network. The obvious choice — record the messages currently in flight on each channel — is the wrong one. That set both grows and shrinks, so every invariant mentioning it must be re-established after every send and every receive by any thread. Interference reasoning then appears everywhere.</p>
+
+  <p>Instead, record what has been <em>sent</em>, and derive what is in flight.</p>
+
+  <figure class="code">
+    <figcaption>src/net.rs — ghost state of one channel and of the network</figcaption>
+<pre><span class="k">pub struct</span> Chan&lt;M&gt; {
+    <span class="k">pub</span> sent:  Seq&lt;M&gt;,   <span class="c">// everything ever sent, in order</span>
+    <span class="k">pub</span> recvd: Seq&lt;M&gt;,   <span class="c">// everything consumed, in consumption order</span>
+}
+
+<span class="k">pub struct</span> Net&lt;M&gt; { <span class="k">pub</span> chans: Map&lt;ChanId, Chan&lt;M&gt;&gt; }
+</pre>
+  </figure>
+
+  <p>Both components only ever grow. The payoff is that an invariant of the shape <em>every message ever sent satisfies P</em> is stable under all interference for free: other threads can only append, and appending preserves a universally quantified statement about the existing elements. Facts of the form <em>message m was sent on channel c</em> are permanent, and can be carried across any number of interference points without being re-proved. In a message-passing proof, statements of that shape are most of what one writes.</p>
+
+  <p>What is in flight is then a derived notion, and it is the only place the channel discipline enters. A per-link FIFO channel delivers the message at the head; a bag channel delivers any message not yet consumed.</p>
+
+  <figure class="code">
+    <figcaption>src/net.rs — the two channel models</figcaption>
+<pre><span class="k">impl</span>&lt;M&gt; ChannelModel&lt;M&gt; <span class="k">for</span> Fifo {
+    <span class="k">open spec fn</span> deliverable(sent: Seq&lt;M&gt;, recvd: Seq&lt;M&gt;, m: M) -&gt; bool {
+        recvd.len() &lt; sent.len() &amp;&amp; sent[recvd.len() <span class="k">as int</span>] == m
+    }
+}
+
+<span class="k">impl</span>&lt;M&gt; ChannelModel&lt;M&gt; <span class="k">for</span> Bag {
+    <span class="k">open spec fn</span> deliverable(sent: Seq&lt;M&gt;, recvd: Seq&lt;M&gt;, m: M) -&gt; bool {
+        recvd.push(m).to_multiset().subset_of(sent.to_multiset())
+    }
+}
+</pre>
+  </figure>
+
+  <p>Both models share <code>sent: Seq&lt;M&gt;</code>. That is what makes the send history the right common representation: the bag model simply forgets the order when deriving what is deliverable. This also settles a question that would otherwise need care. Order in <code>sent</code> is observable only when a channel has a unique sender. Under per-link FIFO a channel is identified by a <code>(source, destination)</code> pair, so it has exactly one sender and concurrent appends cannot race. Under the bag model there may be many senders, but the semantics discards order, so the race is unobservable. Neither instantiation ever requires reasoning about concurrent appends.</p>
+</section>
+
+<section>
+  <h2><span class="num">4</span>Which way do sends and receives move?</h2>
+
+  <p>Reduction rests on Lipton's mover types. An action is a <em>right mover</em> if it commutes with any action of another thread that follows it, and a <em>left mover</em> if it commutes with any action of another thread that precedes it. A sequence of actions executed by one thread that has the shape</p>
+
+  <div class="trace">
+    <span class="chip r">right movers</span><span class="arrow">·</span>
+    <span class="chip n">one non-mover</span><span class="arrow">·</span>
+    <span class="chip l">left movers</span>
+  </div>
+
+  <p>can be treated as a single atomic action: any interleaved execution can be permuted into one where the whole sequence runs uninterrupted.</p>
+
+  <p>For channels the assignment is forced, and it is the opposite of what one might first guess.</p>
+
+  <div class="rule-box">
+    <div class="rule-tag">SEND-L</div>
+    <div class="rule-body">
+      <p class="statement"><strong><code>send</code> is a left mover.</strong> Appending to a channel only ever <em>enables</em> other actions, never disables one. So <code>send; x</code> can always be rewritten <code>x; send</code>. The converse fails: <code>send(m); recv(m)</code> cannot become <code>recv(m); send(m)</code>, because the message is not there yet.</p>
+      <p class="reify">In code: <code>send</code> is nonblocking, which is also the fourth of Civl's left-mover conditions. Its postcondition contains no environment step, so no interference point follows it.</p>
+    </div>
+  </div>
+
+  <div class="rule-box">
+    <div class="rule-tag">RECV-R</div>
+    <div class="rule-body">
+      <p class="statement"><strong><code>recv</code> is a right mover.</strong> Consuming a message only ever <em>disables</em> other actions, so it can always be delayed: <code>recv; x</code> can be rewritten <code>x; recv</code>.</p>
+      <p class="reify">In code: <code>recv</code> blocks, so it can never satisfy the non-blocking condition and can never be a left mover. Its postcondition therefore includes an environment step.</p>
+    </div>
+  </div>
+
+  <p>The consequence is the shape of a reduced block:</p>
+
+  <div class="trace">
+    <span class="chip r">recv</span><span class="arrow">·</span>
+    <span class="chip n">local compute</span><span class="arrow">·</span>
+    <span class="chip l">send</span><span class="arrow">·</span>
+    <span class="chip l">send</span>
+  </div>
+
+  <p>which is exactly the shape of an event handler. A handler loop needs one interference point per iteration, at the receive, rather than one per channel operation.</p>
+
+  <p>Because both models present the same <code>sent: Seq&lt;M&gt;</code>, the commutativity obligations reduce to facts about sequences and multisets, proved once per channel model rather than once per protocol. For instance, <em>send is a left mover</em> becomes the statement that appending never invalidates a delivery that was already possible:</p>
+
+  <figure class="code">
+    <figcaption>src/net.rs — a mover obligation on the channel model</figcaption>
+<pre><span class="c">/// SEND IS A LEFT MOVER: appending to the history never disables a</span>
+<span class="c">/// delivery that was already possible.</span>
+<span class="k">proof fn</span> lemma_send_preserves_deliverable(sent: Seq&lt;M&gt;, recvd: Seq&lt;M&gt;, m: M, m2: M)
+    <span class="k">requires</span> Self::deliverable(sent, recvd, m)
+    <span class="k">ensures</span>  Self::deliverable(sent.push(m2), recvd, m);
+</pre>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="num">5</span>Yield invariants, and what survives one</h2>
+
+  <p>Reduction makes atomic blocks larger; it does not eliminate the points between them. At those points other threads run, and the proof needs to say what they may do. That is the role of a <em>yield invariant</em>: a named predicate that every thread may assume at an interference point and must preserve at each of its own steps.</p>
+
+  <p>Each thread carries a token describing its view of the network and the endpoints it owns.</p>
+
+  <figure class="code">
+    <figcaption>src/api.rs — a thread's view</figcaption>
+<pre><span class="k">pub struct</span> NetToken&lt;P: Protocol&gt; {
+    <span class="k">pub</span> net:        Net&lt;P::M&gt;,
+    <span class="k">pub</span> send_owned: Set&lt;ChanId&gt;,   <span class="c">// channels where this thread is the only sender</span>
+    <span class="k">pub</span> recv_owned: Set&lt;ChanId&gt;,   <span class="c">// channels whose Receiver this thread owns</span>
+    <span class="k">pub</span> p: PhantomData&lt;P&gt;,
+}
+</pre>
+  </figure>
+
+  <p>What the environment may do at an interference point is then stated once. Every clause is a consequence of a design decision already made:</p>
+
+  <figure class="code">
+    <figcaption>src/api.rs — the environment step</figcaption>
+<pre><span class="k">pub open spec fn</span> env_step&lt;P: Protocol&gt;(t0: NetToken&lt;P&gt;, t1: NetToken&lt;P&gt;) -&gt; bool {
+    <span class="c">// MONOTONICITY: send histories only ever grow.</span>
+    &amp;&amp;&amp; <span class="k">forall</span>|c: ChanId| t0.net.dom().contains(c)
+          ==&gt; t0.net.sent(c).is_prefix_of(t1.net.sent(c))
+    <span class="c">// FRAMING FROM OWNERSHIP: unique sender =&gt; nobody else appends.</span>
+    &amp;&amp;&amp; <span class="k">forall</span>|c: ChanId| t0.net.dom().contains(c) &amp;&amp; t0.send_owned.contains(c)
+          ==&gt; t1.net.sent(c) == t0.net.sent(c)
+    <span class="c">// FRAMING FROM OWNERSHIP: unique consumer =&gt; nobody else consumes.</span>
+    &amp;&amp;&amp; <span class="k">forall</span>|c: ChanId| t0.net.dom().contains(c) &amp;&amp; t0.recv_owned.contains(c)
+          ==&gt; t1.net.recvd(c) == t0.net.recvd(c)
+    <span class="c">// ...</span>
+}
+</pre>
+  </figure>
+
+  <p>The two framing clauses are ownership doing proof work. Because <code>Receiver</code> is not <code>Clone</code>, a thread holding one knows no other thread consumes from that channel; because a per-link FIFO channel has a unique sender, its owner knows no other thread appends to it. Neither fact needs an argument — it is what the Rust type already guarantees.</p>
+
+  <p>A blocking receive is where a thread meets the environment, and its specification says so directly.</p>
+
+  <figure class="code">
+    <figcaption>src/api.rs — the blocking receive</figcaption>
+<pre><span class="k">pub fn</span> recv&lt;P: Protocol&gt;(r: &amp;Receiver&lt;P::M&gt;, Tracked(t): Tracked&lt;&amp;<span class="k">mut</span> NetToken&lt;P&gt;&gt;) -&gt; (m: P::M)
+    <span class="k">requires</span>
+        old(t).recv_owned.contains(r.id@),
+        P::inv(old(t).net),
+    <span class="k">ensures</span>
+        <span class="k">exists</span>|mid: NetToken&lt;P&gt;|
+            <span class="hl">env_step(*old(t), mid)</span> &amp;&amp; P::inv(mid.net)
+            &amp;&amp; P::C::deliverable(mid.net.sent(r.id@), mid.net.recvd(r.id@), m)
+            &amp;&amp; final(t).net == mid.net.do_recv(r.id@, m),
+</pre>
+  </figure>
+
+  <p>Read it as: the environment runs, reaching some state <code>mid</code> in which the invariant still holds; then a message deliverable in <code>mid</code> is consumed. The precondition <code>P::inv(old(t).net)</code> is this thread's share of the non-interference obligation.</p>
+
+  <p><code>send</code> has no such existential — that absence <em>is</em> the reduction claim, and section 7 explains what has to be proved to earn it.</p>
+</section>
+
+<section>
+  <h2><span class="num">6</span>Remote calls: the awkward shape</h2>
+
+  <p>Return to the coordinator. Its inner two lines are</p>
+
+  <div class="trace">
+    <span class="chip l">send request</span><span class="arrow">·</span>
+    <span class="chip r">recv reply</span>
+  </div>
+
+  <p>a left mover followed by a right mover — precisely the wrong order. Reduction alone will not merge them, and it should not: the server genuinely runs in between, so there is a real interference point inside every remote call. Yet the informal argument treats the call as atomic, and it is right to.</p>
+
+  <p>The gap is closed by Civl's abstraction step rather than by reduction. A blocking receive is not a left mover because it can block — but blocking is judged relative to the action's <em>gate</em>, the condition under which the action must not fail. Strengthen the gate to say a reply is already present, and the receive no longer blocks:</p>
+
+  <div class="rule-box">
+    <div class="rule-tag">RECV-ABS</div>
+    <div class="rule-body">
+      <p class="statement">Replace <code>recv</code> by an abstraction whose gate asserts that the channel holds an unconsumed message. Under that gate it never blocks, so it satisfies the left-mover conditions, and <code>send; recv</code> becomes <span class="chip l" style="padding:0.1rem 0.4rem">L</span> <span class="arrow">·</span> <span class="chip l" style="padding:0.1rem 0.4rem">L</span>, which reduces to one atomic action. The obligation has moved, not vanished: the caller must now <em>discharge the gate</em>.</p>
+      <p class="reify">In code: <code>recv_abs</code>, whose precondition is <code>old(t).net.recvd(r.id@).len() &lt; old(t).net.sent(r.id@).len()</code> and whose postcondition contains no environment step.</p>
+    </div>
+  </div>
+
+  <p>What discharges the gate is ownership again. Each call mints a fresh reply channel and moves the reply capability into the request; the caller keeps the sole <code>Receiver</code>. Exactly one reply can be produced, and only this thread can consume it. Together with the handler being a left mover — so it commutes leftwards until it abuts the call — the reply provably exists by the time <code>recv_abs</code> runs.</p>
+
+  <p>A handler is described by its atomic action, and must supply the conditions that argument uses:</p>
+
+  <figure class="code">
+    <figcaption>src/api.rs — what a handler must prove</figcaption>
+<pre><span class="k">pub trait</span> Handler&lt;P: Protocol&gt; {
+    <span class="k">spec fn</span> me() -&gt; P::A;                       <span class="c">// which pool action this handler is</span>
+    <span class="k">spec fn</span> reply_chan(req: P::M) -&gt; ChanId;    <span class="c">// where it replies</span>
+
+    <span class="c">/// LEFT-MOVER CONDITION (4): non-blocking.</span>
+    <span class="k">proof fn</span> lemma_nonblocking(req: P::M, n0: Net&lt;P::M&gt;)
+        <span class="k">requires</span> P::inv(n0), P::gate(Self::me(), req, n0)
+        <span class="k">ensures</span>  <span class="k">exists</span>|resp, n1| P::step(Self::me(), req, resp, n0, n1);
+
+    <span class="c">/// Effect on the reply channel is exactly one append.</span>
+    <span class="k">proof fn</span> lemma_reply_effect(req: P::M, resp: P::M, n0: Net&lt;P::M&gt;, n1: Net&lt;P::M&gt;)
+        <span class="k">ensures</span> n1.sent(Self::reply_chan(req))
+                    == n0.sent(Self::reply_chan(req)).push(resp), <span class="c">/* ... */</span>;
+}
+</pre>
+  </figure>
+
+  <p>The remote call is then an ordinary verified function rather than an assumption. Its body is: send the request, execute the handler at the call site, receive the reply under the now-discharged gate.</p>
+
+  <figure class="code">
+    <figcaption>src/api.rs — rpc, abridged</figcaption>
+<pre><span class="k">pub fn</span> rpc&lt;P: Protocol, H: Handler&lt;P&gt;&gt;(
+    tx: &amp;Sender&lt;P::M&gt;, req: P::M, rx: &amp;Receiver&lt;P::M&gt;, Tracked(t): Tracked&lt;&amp;<span class="k">mut</span> NetToken&lt;P&gt;&gt;,
+) -&gt; (resp: P::M)
+    <span class="k">requires</span>
+        rx.id@ == H::reply_chan(req),                    <span class="c">// this call's own reply channel</span>
+        old(t).net.sent(rx.id@) == Seq::&lt;P::M&gt;::empty(), <span class="c">// freshly minted</span>
+        old(t).recv_owned.contains(rx.id@),              <span class="c">// and solely ours</span>
+        <span class="c">/* ... */</span>
+    <span class="k">ensures</span>
+        <span class="hl">exists</span>|n2| P::step(H::me(), req, resp, old(t).net.do_send(tx.id@, req), n2)
+                 &amp;&amp; final(t).net == n2.do_recv(rx.id@, resp),
+{
+    send::&lt;P&gt;(tx, req, Tracked(t));
+    <span class="k">let ghost</span> g_resp = absorb_handler::&lt;P, H&gt;(t, g_req);
+    <span class="c">/* ... gate now discharged ... */</span>
+    recv_abs::&lt;P&gt;(rx, Tracked(t))
+}
+</pre>
+  </figure>
+
+  <p>Note what the postcondition does <em>not</em> contain: any environment step. The caller sees one atomic action, described by the handler's own transition relation, and so learns what the server computed. The coordinator can therefore be verified as a sequential program, with an ordinary loop invariant:</p>
+
+  <figure class="code">
+    <figcaption>src/twophase.rs — the coordinator, verified</figcaption>
+<pre><span class="k">while</span> i &lt; reqs.len()
+    <span class="k">invariant</span>
+        <span class="c">// votes collected so far</span>
+        all_yes ==&gt; <span class="k">forall</span>|j: int| 0 &lt;= j &lt; i ==&gt; voted_yes(t.net, rsps[j].id@),
+        <span class="k">forall</span>|j: int| i &lt;= j &lt; rsps.len() ==&gt; t.net.sent(rsps[j].id@).len() == 0,
+        <span class="c">/* ... framing and ownership ... */</span>
+    <span class="k">decreases</span> reqs.len() - i,
+{
+    <span class="k">let</span> req  = Msg::Prepare(Ghost(rsps[i <span class="k">as int</span>].id@));
+    <span class="k">let</span> resp = rpc::&lt;Tpc, PrepareH&gt;(&amp;reqs[i], req, &amp;rsps[i], Tracked(t));
+    <span class="k">match</span> resp { Msg::Vote(b) =&gt; { <span class="k">if</span> !b { all_yes = <span class="k">false</span>; } } _ =&gt; all_yes = <span class="k">false</span>, }
+    i = i + 1;
+}
+</pre>
+  </figure>
+
+  <p>and its postcondition is the property we started with:</p>
+
+  <figure class="code">
+    <figcaption>src/twophase.rs — the coordinator's guarantee</figcaption>
+<pre><span class="k">ensures</span>
+    <span class="c">// SAFETY: commit only if every participant voted yes.</span>
+    committed ==&gt; <span class="k">forall</span>|j: int| 0 &lt;= j &lt; rsps.len()
+        ==&gt; voted_yes(final(t).net, rsps[j].id@),
+</pre>
+  </figure>
+
+  <p>A single call collapses cheaply, using nothing but ownership. Fanning out to many participants and then collecting a quorum does not: discharging <em>at least k replies are present</em> requires an induction over the outstanding requests, which is what inductive sequentialization provides. The two-phase commit above sidesteps that by asking participants one at a time. Protocols that must gather concurrently — Paxos being the standard example — need the inductive rule.</p>
+</section>
+
+<section>
+  <h2><span class="num">7</span>Commutativity is a property of the whole program</h2>
+
+  <p>The claim that <code>send</code> is a left mover is not a fact about <code>send</code> alone. Mover types are relative to the pool of actions the program can execute. An action gated on <em>channel c is empty</em> would be disabled by an unrelated append, and then <code>send</code> would not be a left mover at all.</p>
+
+  <p>So a protocol must declare its complete set of actions, and prove that they interact as the reduction assumes. That declaration also carries the message type, the channel model, and the yield invariant, so that a thread's token fixes which protocol it is running:</p>
+
+  <figure class="code">
+    <figcaption>src/api.rs — the protocol declaration, abridged</figcaption>
+<pre><span class="k">pub trait</span> Protocol {
+    <span class="k">type</span> M;   <span class="c">// message type</span>
+    <span class="k">type</span> A;   <span class="c">// action index: one variant per atomic action</span>
+    <span class="k">type</span> C: ChannelModel&lt;Self::M&gt;;
+
+    <span class="k">spec fn</span> inv(net: Net&lt;Self::M&gt;) -&gt; bool;                  <span class="c">// yield invariant</span>
+    <span class="k">spec fn</span> footprint(a: Self::A, req: Self::M) -&gt; Set&lt;ChanId&gt;;
+    <span class="k">spec fn</span> gate(a: Self::A, req: Self::M, n: Net&lt;Self::M&gt;) -&gt; bool;
+    <span class="k">spec fn</span> step(a: Self::A, req: Self::M, resp: Self::M,
+                 n0: Net&lt;Self::M&gt;, n1: Net&lt;Self::M&gt;) -&gt; bool;
+    <span class="c">/* ... five proof obligations, below ... */</span>
+}
+</pre>
+  </figure>
+
+  <p>A <em>footprint</em> is the set of channels an action may touch. The obligations are then:</p>
+
+  <div class="rule-box">
+    <div class="rule-tag">FRAME</div>
+    <div class="rule-body">
+      <p class="statement">An action does not <strong>write</strong> outside its footprint.</p>
+      <p class="reify"><code>lemma_frame</code>: for every <code>c</code> not in the footprint, <code>n1.chans[c] == n0.chans[c]</code>.</p>
+    </div>
+  </div>
+
+  <div class="rule-box">
+    <div class="rule-tag">LOCAL</div>
+    <div class="rule-body">
+      <p class="statement">An action does not <strong>read</strong> outside its footprint either: an operation on an unrelated channel neither enables, disables, nor alters it. This is literally the statement that <code>send</code> is a left mover with respect to that action. Its second conclusion is Civl's left-mover conditions (1) and (2), gate preservation.</p>
+      <p class="reify"><code>lemma_local_send</code> and <code>lemma_local_recv</code>: from <code>step(a, req, resp, n0, n1)</code> and <code>c</code> outside the footprint, conclude <code>step(a, req, resp, n0.do_send(c,m), n1.do_send(c,m))</code> and <code>gate(a, req, n0.do_send(c,m))</code>.</p>
+    </div>
+  </div>
+
+  <div class="rule-box">
+    <div class="rule-tag">COMM</div>
+    <div class="rule-body">
+      <p class="statement">Actions with disjoint footprints commute. Stated existentially, as Civl does: every <code>a; b</code> execution can be reordered into a <code>b; a</code> execution reaching the same final state. A universal <code>n_ab == n_ba</code> would be false for nondeterministic actions, and abstract layers are nondeterministic by construction.</p>
+      <p class="reify"><code>lemma_commutes</code>, concluding <code>exists|mid| step(b, .., n0, mid) &amp;&amp; step(a, .., mid, n_ab)</code>.</p>
+    </div>
+  </div>
+
+  <div class="rule-box">
+    <div class="rule-tag">NI</div>
+    <div class="rule-body">
+      <p class="statement">Every action preserves the yield invariant. This is the non-interference half of an Owicki–Gries proof, discharged once per action rather than once per pair of program points.</p>
+      <p class="reify"><code>lemma_preserves_inv</code>; and <code>send</code> additionally <code>requires P::inv(old(t).net.do_send(s.id@, m))</code>, which is the check at the thread's own step.</p>
+    </div>
+  </div>
+
+  <p>Most protocols discharge <span style="font-family:var(--mono);font-size:0.85em">LOCAL</span> and <span style="font-family:var(--mono);font-size:0.85em">COMM</span> from three generic facts — appends to distinct channels commute, and so on — proved once in the library. Two-phase commit's entire pool declaration is short:</p>
+
+  <figure class="code">
+    <figcaption>src/twophase.rs — two-phase commit's actions</figcaption>
+<pre><span class="k">pub enum</span> TpcAct { Prepare }
+
+<span class="k">impl</span> Protocol <span class="k">for</span> Tpc {
+    <span class="k">type</span> M = Msg;  <span class="k">type</span> A = TpcAct;  <span class="k">type</span> C = Fifo;
+
+    <span class="k">open spec fn</span> inv(net: Net&lt;Msg&gt;) -&gt; bool { <span class="k">true</span> }
+
+    <span class="k">open spec fn</span> footprint(a: TpcAct, req: Msg) -&gt; Set&lt;ChanId&gt; {
+        Set::empty().insert(req-&gt;Prepare_0@)     <span class="c">// just its reply channel</span>
+    }
+
+    <span class="k">open spec fn</span> step(a: TpcAct, req: Msg, resp: Msg, n0: Net&lt;Msg&gt;, n1: Net&lt;Msg&gt;) -&gt; bool {
+        &amp;&amp;&amp; resp <span class="k">is</span> Vote
+        &amp;&amp;&amp; n1 == n0.do_send(req-&gt;Prepare_0@, resp)
+    }
+
+    <span class="k">proof fn</span> lemma_local_send(<span class="c">/* ... */</span>) {
+        <span class="k">assert</span>(Self::footprint(a, req).contains(req-&gt;Prepare_0@));
+        lemma_sends_commute(n0, req-&gt;Prepare_0@, resp, c, m);   <span class="c">// generic</span>
+    }
+    <span class="c">/* ... */</span>
+}
+</pre>
+  </figure>
+
+  <p>The yield invariant here is <code>true</code>, which is honest: because every interference point in the coordinator is hidden inside an atomic remote call, this proof needs no invariant about the network at all. The next protocol is not so lucky.</p>
+
+  <aside class="note">
+    <div class="label">Why <code>Ghost&lt;ChanId&gt;</code> in the message</div>
+    <p><code>Msg::Prepare(Ghost&lt;ChanId&gt;)</code> carries the identity of the call's reply channel. <code>ChanId</code> is a specification-only type, so it cannot appear in a running value; wrapping it in <code>Ghost</code> gives a variant whose payload is erased at compile time. It is the model's stand-in for moving a linear reply <code>Sender</code> into the request.</p>
+  </aside>
+</section>
+
+<section>
+  <h2><span class="num">8</span>A protocol that needs its invariant</h2>
+
+  <p>Chang–Roberts elects a leader on a ring. Node <em>i</em> receives on the link from its predecessor and sends on the link to its successor. On receiving a value <em>v</em>: if <em>v</em> exceeds its own id it forwards <em>v</em>; if <em>v</em> equals its own id it declares itself leader; otherwise it drops the message. The property is that only the maximum id can ever declare itself leader.</p>
+
+  <p>The node step has exactly the reduced shape, so it needs one interference point per iteration:</p>
+
+  <figure class="code">
+    <figcaption>src/chang_roberts.rs — one node step</figcaption>
+<pre>    <span class="c">// YIELD POINT.</span>
+    <span class="k">let</span> m = recv::&lt;Cr&gt;(rx, Tracked(t));
+
+    <span class="k">if</span> m.val &gt; myid {
+        <span class="k">let</span> fwd = Elect { val: m.val, origin: Ghost(m.origin@),
+                          hops: Ghost((m.hops@ + 1) <span class="k">as nat</span>) };
+        <span class="c">/* ... proof that fwd satisfies the invariant ... */</span>
+        send::&lt;Cr&gt;(tx, fwd, Tracked(t));          <span class="c">// left mover: no yield after</span>
+        StepOut { leader: <span class="k">false</span>, <span class="c">/* ... */</span> }
+    } <span class="k">else if</span> m.val == myid {
+        <span class="c">/* ... proof that myid is the maximum ... */</span>
+        StepOut { leader: <span class="k">true</span>, <span class="c">/* ... */</span> }
+    } <span class="k">else</span> { StepOut { leader: <span class="k">false</span>, <span class="c">/* ... */</span> } }
+</pre>
+  </figure>
+
+  <p>Here the yield invariant does real work. Each message carries two ghost fields — its origin and how many hops it has travelled — which are erased at runtime and exist only for the proof. The invariant states that a message sitting on link <em>j</em> came from a real node, has travelled to <em>j</em>, and dominates every node it passed through:</p>
+
+  <figure class="code">
+    <figcaption>src/chang_roberts.rs — the ring invariant</figcaption>
+<pre><span class="k">pub open spec fn</span> msg_ok(j: int, m: Elect) -&gt; bool {
+    &amp;&amp;&amp; 0 &lt;= m.origin@ &lt; n_nodes()
+    &amp;&amp;&amp; m.val <span class="k">as int</span> == id(m.origin@)
+    &amp;&amp;&amp; j == (m.origin@ + m.hops@) % n_nodes()
+    &amp;&amp;&amp; <span class="k">forall</span>|k: int| 0 &lt;= k &lt;= m.hops@
+            ==&gt; m.val <span class="k">as int</span> &gt;= id((m.origin@ + k) % n_nodes())
+}
+
+<span class="k">open spec fn</span> inv(net: Net&lt;Elect&gt;) -&gt; bool {
+    <span class="k">forall</span>|j: int, x: int|
+        0 &lt;= j &lt; n_nodes() &amp;&amp; 0 &lt;= x &lt; net.sent(link(j)).len()
+            ==&gt; msg_ok(j, net.sent(link(j))[x])
+}
+</pre>
+  </figure>
+
+  <p>The invariant quantifies over <code>sent</code>, the monotone component, which is why it survives interference without an argument. The leader case then closes in three steps: distinct ids force the returning message to have originated at this node; the hop arithmetic forces it to have made a full lap; and a full lap covers every node, so this node's id dominates all others. Each is a small lemma about modular arithmetic.</p>
+</section>
+
+<section>
+  <h2><span class="num">9</span>Layers</h2>
+
+  <p>The last ingredient replaces a component by a coarser description of it. In Civl a layer is an entire program with its own set of actions; layer <em>k</em>'s atomic actions are layer <em>k+1</em>'s primitives. So refinement relates two protocols, and their action sets differ — related by an abstraction map, which need not be injective, since collapsing a family of concrete actions into one abstract action is the point.</p>
+
+  <figure class="code">
+    <figcaption>src/layer.rs — refinement between two protocols</figcaption>
+<pre><span class="k">pub trait</span> Refines&lt;Lo: Protocol, Hi: Protocol&lt;M = Lo::M&gt;&gt; {
+    <span class="k">spec fn</span> abs(a: Lo::A) -&gt; Hi::A;
+
+    <span class="c">/// The abstract invariant is implied by the concrete one.</span>
+    <span class="k">proof fn</span> lemma_inv(n: Net&lt;Lo::M&gt;)
+        <span class="k">requires</span> Lo::inv(n) <span class="k">ensures</span> Hi::inv(n);
+
+    <span class="c">/// Civl Def 3.1 (1): the ABSTRACT action fails MORE OFTEN.</span>
+    <span class="k">proof fn</span> lemma_gate(a: Lo::A, req: Lo::M, n: Net&lt;Lo::M&gt;)
+        <span class="k">requires</span> Hi::gate(Self::abs(a), req, n)
+        <span class="k">ensures</span>  Lo::gate(a, req, n);
+
+    <span class="c">/// Civl Def 3.1 (2): where the abstraction is safe, every concrete</span>
+    <span class="c">/// transition is an abstract one.</span>
+    <span class="k">proof fn</span> lemma_step(a: Lo::A, req: Lo::M, resp: Lo::M,
+                       n0: Net&lt;Lo::M&gt;, n1: Net&lt;Lo::M&gt;)
+        <span class="k">requires</span> Hi::gate(Self::abs(a), req, n0), Lo::step(a, req, resp, n0, n1)
+        <span class="k">ensures</span>  Hi::step(Self::abs(a), req, resp, n0, n1);
+}
+</pre>
+  </figure>
+
+  <p>The direction of the gate condition is the one that surprises people: the <em>abstract</em> action must fail more often than the concrete one. Anywhere the abstraction is safe to use, the implementation is safe too — which is what lets a caller reason with the abstraction and still conclude something about the code.</p>
+
+  <p>Refinement composes, so stacks of layers do. For Chang–Roberts the abstract layer has its own action type, a weaker invariant — messages are well formed, but nothing is claimed about domination or hop counts — and a nondeterministic step that forgets <em>which</em> message is forwarded. The concrete node step is then reported as an action of the abstract protocol by a wrapper whose executable body is unchanged; only the specification is raised, by a lemma:</p>
+
+  <figure class="code">
+    <figcaption>src/chang_roberts.rs — raising one step a layer</figcaption>
+<pre><span class="k">let</span> r = cr_step(i, rx, tx, myid, Tracked(t));
+<span class="k">proof</span> {
+    CrRefines::lemma_inv(n_pre);
+    CrRefines::lemma_inv(t.net);
+    lift::&lt;Cr, CrAbs, CrRefines&gt;(CrAct::Step(i <span class="k">as int</span>), r.got@, r.put@, n_pre, t.net);
+}
+</pre>
+  </figure>
+
+  <p>A subtlety worth naming: the refinement statement is not about the state on entry to the function, but about the state <em>after</em> the interference point inside it. The postcondition says there exists a state <code>n_pre</code>, reached once the environment has run, from which the whole body is one atomic action. That is Civl's condition that along every path there is exactly one yield-to-yield fragment behaving like the refined action.</p>
+</section>
+
+<section>
+  <h2><span class="num">10</span>What is assumed</h2>
+
+  <p>Verus checks that the obligations above are discharged. It does not, and cannot, check the reduction theory that makes those obligations sufficient — there is no formal execution semantics inside the Rust program to state Lipton's theorem against. So the boundary has to be drawn explicitly.</p>
+
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Assumed</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>send</code>, <code>recv</code>, <code>recv_abs</code>, <code>yield_point</code>, <code>oneshot</code></td>
+        <td>The channel primitives. Their specifications define the model; the runtime is not verified.</td>
+      </tr>
+      <tr>
+        <td><code>absorb_handler</code></td>
+        <td>The reduction rule itself: a left-moving handler whose request has been sent may be executed at the call site, because a left mover commutes leftwards until it abuts its caller. This is Civl's synchronized asynchronous call, stated once — not a claim about any protocol.</td>
+      </tr>
+      <tr>
+        <td>Pool completeness</td>
+        <td>That a protocol's action type enumerates <em>every</em> action of the protocol. Nothing prevents a handler being declared elsewhere. Discharged by review.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Everything else is proved: the mover facts about each channel model, the framing, locality, commutativity and non-interference obligations for each protocol, the remote-call combinator, the refinement conditions, and the safety properties of both protocols. The current development discharges 53 such obligations with no admitted goals.</p>
+
+  <p>The assumptions can be reduced further. Building a shallow trace semantics as specification-level data and proving the reduction theorem about it would relocate the trust from <em>reduction is sound</em> — a theorem about all executions — to <em>these five functions implement this transition relation</em>, a much smaller and more reviewable claim. That is the natural next step, along with the inductive rule needed for protocols that gather quorums.</p>
+</section>
+
+<hr class="div">
+
+<footer class="colophon">
+  <div><strong>Sources.</strong> The proof rules are Civl's. See Kragl and Qadeer, <em>The Civl Verifier</em> (FMCAD 2021); Kragl, Qadeer and Henzinger, <em>Refinement for Structured Concurrent Programs</em> (CAV 2020); Kragl, Enea, Henzinger, Mutluergil and Qadeer, <em>Inductive Sequentialization of Asynchronous Programs</em> (PLDI 2020); and Gangamreddypalli, Enea and Qadeer, <em>Reduction for Structured Concurrent Programs</em> (ESOP 2026).</div>
+  <div>Code references are to <code>src/net.rs</code>, <code>src/api.rs</code>, <code>src/layer.rs</code>, <code>src/twophase.rs</code> and <code>src/chang_roberts.rs</code>, checked with Verus 0.2026.08.15.</div>
+</footer>
+
+</div>

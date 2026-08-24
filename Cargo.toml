@@ -1,0 +1,29 @@
+# Package metadata for mpverus.
+#
+# NOTE: `cargo build` does NOT build this crate, and is not meant to. The
+# sources are Verus, not plain Rust: they use the `verus!` macro and depend on
+# `vstd`, which is not published to crates.io and ships with the Verus
+# toolchain. Verus is the compiler here -- it both verifies and, with
+# `--compile`, emits a binary.
+#
+#     ./verify.sh              # verify everything
+#     ./verify.sh --run        # verify, compile, and run the demo
+#
+# This file exists so the repository is a well-formed package: it fixes the
+# name, version, licence and layout, and lets `cargo metadata` and tooling
+# describe the project.
+[package]
+name = "mpverus"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Civl-style verification of message-passing Rust protocols in Verus: ownership-derived mover types, layered refinement, and provenance."
+repository = "https://github.com/rupakm/mpverus"
+readme = "README.md"
+keywords = ["verification", "verus", "distributed-systems", "concurrency"]
+categories = ["development-tools"]
+publish = false
+
+[[bin]]
+name = "mpverus"
+path = "src/main.rs"
