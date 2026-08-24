@@ -25,10 +25,21 @@ echo "== counterexamples (each MUST be rejected) =="
 bash counterexamples/check.sh || status=1
 
 echo
+# Spikes are design experiments, deliberately not integrated -- but they are
+# cited as evidence in docs/plan.md, so a spike that stops verifying is a
+# broken claim, not a curiosity. This loop used to print the verdict and drop
+# it on the floor, so `verify.sh` reported success while a spike failed.
 echo "== spikes (design experiments, verified but not integrated) =="
 for f in spike/*.rs; do
-    out=$("$VERUS" "$f" --crate-type=bin 2>&1 | grep -o 'verification results.*')
-    printf '  %-28s %s\n' "$f" "${out:-did not verify}"
+    out=$("$VERUS" "$f" --crate-type=bin 2>&1) && rc=0 || rc=$?
+    line=$(printf '%s' "$out" | grep -o 'verification results.*' | head -1)
+    if [ "$rc" -ne 0 ] || [ -z "$line" ] || ! printf '%s' "$line" | grep -q ', 0 errors'; then
+        printf '  %-28s FAILED\n' "$f"
+        printf '%s\n' "$out" | grep -E '^error' | head -3 | sed 's/^/        /'
+        status=1
+    else
+        printf '  %-28s %s\n' "$f" "$line"
+    fi
 done
 
 if [ "${1:-}" = "--run" ]; then
