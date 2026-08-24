@@ -83,8 +83,10 @@ impl NetInv<Beat> for HbTok {
         }
     }
 
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Beat>>, c: ChanId,
-                                   s: Seq<Beat>, m: Beat) {
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Beat>>,
+                                   was_sent: Set<(ChanId, nat, Beat)>,
+                                   c: ChanId, s: Seq<Beat>, m: Beat,
+                                   causes: Set<(ChanId, nat, Beat)>) {
         let post = sent.insert(c, s.push(m));
         if post.dom().contains(link()) {
             // The link's history is untouched unless this send was on it, so

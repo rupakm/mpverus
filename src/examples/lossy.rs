@@ -76,8 +76,10 @@ impl NetInv<Pkt> for Lossy {
     proof fn lemma_cause_gives(c: ChanId, m: Pkt, causes: Set<(ChanId, nat, Pkt)>) { }
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Pkt>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Pkt>>, c: ChanId,
-                                   s: Seq<Pkt>, m: Pkt) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Pkt>>,
+                                   was_sent: Set<(ChanId, nat, Pkt)>,
+                                   c: ChanId, s: Seq<Pkt>, m: Pkt,
+                                   causes: Set<(ChanId, nat, Pkt)>) { }
 }
 
 // ---------------------------------------------------------------------------

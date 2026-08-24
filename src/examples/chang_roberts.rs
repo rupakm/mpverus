@@ -157,8 +157,10 @@ impl NetInv<Elect> for CrTok {
     proof fn lemma_cause_gives(c: ChanId, m: Elect, causes: Set<(ChanId, nat, Elect)>) { }
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Elect>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Elect>>, c: ChanId,
-                                   s: Seq<Elect>, m: Elect) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Elect>>,
+                                   was_sent: Set<(ChanId, nat, Elect)>,
+                                   c: ChanId, s: Seq<Elect>, m: Elect,
+                                   causes: Set<(ChanId, nat, Elect)>) { }
 }
 }
 

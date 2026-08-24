@@ -262,10 +262,36 @@ pub trait NetInv<M> : Sized {
             Self::extra(sent.insert(c, Seq::<M>::empty()));
 
     /// ... and is preserved by a send the gate admits.
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
+    ///
+    /// This lemma is handed everything the machine knows at the moment of the
+    /// send, not just the gate. A guarantee about ONE channel needs only the
+    /// gate; a guarantee relating messages on DIFFERENT channels cannot be
+    /// preserved from the gate alone, because a gate reads one history. What
+    /// makes such a guarantee provable is the same thing that makes the send
+    /// legal in the first place: the witnesses the sender presented. So they
+    /// are passed in, together with the record they came from and the machine's
+    /// agreement invariant relating that record to the histories.
+    ///
+    /// Paxos is the protocol that forced this. Its safety argument is about
+    /// messages on many acceptors' channels, and the reason a proposer may send
+    /// `Accept(b, v)` is precisely the quorum of promises it holds witnesses
+    /// for. With only the gate available, that argument cannot be made.
+    proof fn lemma_extra_preserved(
+        sent: Map<ChanId, Seq<M>>,
+        was_sent: Set<(ChanId, nat, M)>,
+        c: ChanId, s: Seq<M>, m: M,
+        causes: Set<(ChanId, nat, M)>,
+    )
         requires
             Self::extra(sent), Self::gate(c, s, m),
             sent.dom().contains(c), sent[c] == s,
+            // The machine's agreement invariant: a witness names a real
+            // position of a real history.
+            forall|k: ChanId, i: nat, mm: M| (#[trigger] was_sent.contains((k, i, mm)))
+                ==> sent.dom().contains(k) && i < sent[k].len() && sent[k][i as int] == mm,
+            // The witnesses the sender presented, and what they justify.
+            causes.subset_of(was_sent),
+            Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
             Self::extra(sent.insert(c, s.push(m)));
 }
@@ -495,7 +521,7 @@ tokenized_state_machine!{
             c: ChanId, s: Seq<M>, m: M, causes: Set<(ChanId, nat, M)>,
         ) {
             Inv::lemma_gate_gives_inv(c, s, m);
-            Inv::lemma_extra_preserved(pre.sent, c, s, m);
+            Inv::lemma_extra_preserved(pre.sent, pre.was_sent, c, s, m, causes);
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
             assert forall|k: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((k, i, mm))
                 implies post.sent.dom().contains(k)

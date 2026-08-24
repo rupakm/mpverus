@@ -87,8 +87,10 @@ impl NetInv<Item> for CollTok {
     proof fn lemma_cause_gives(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) { }
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Item>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Item>>, c: ChanId,
-                                   s: Seq<Item>, m: Item) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Item>>,
+                                   was_sent: Set<(ChanId, nat, Item)>,
+                                   c: ChanId, s: Seq<Item>, m: Item,
+                                   causes: Set<(ChanId, nat, Item)>) { }
 }
 }
 

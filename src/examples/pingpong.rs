@@ -71,8 +71,10 @@ impl NetInv<Msg> for PingPong {
     proof fn lemma_cause_gives(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) { }
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>, c: ChanId,
-                                   s: Seq<Msg>, m: Msg) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>,
+                                   was_sent: Set<(ChanId, nat, Msg)>,
+                                   c: ChanId, s: Seq<Msg>, m: Msg,
+                                   causes: Set<(ChanId, nat, Msg)>) { }
 }
 
 /// Delivery here is deterministic, so this protocol could use a remote call.

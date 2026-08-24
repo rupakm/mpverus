@@ -153,8 +153,10 @@ impl NetInv<Msg> for Lease {
 
     /// The gate is exactly what makes this go through: the new entry exceeds
     /// every existing one, and the existing ones were already ordered.
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>, c: ChanId,
-                                   s: Seq<Msg>, m: Msg) {
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>,
+                                   was_sent: Set<(ChanId, nat, Msg)>,
+                                   c: ChanId, s: Seq<Msg>, m: Msg,
+                                   causes: Set<(ChanId, nat, Msg)>) {
         let post = sent.insert(c, s.push(m));
         if post.dom().contains(journal()) {
             assert forall|x: int, y: int| 0 <= x < y < post[journal()].len()

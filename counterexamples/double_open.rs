@@ -35,8 +35,10 @@ impl NetInv<u64> for Triv {
     proof fn lemma_cause_gives(c: ChanId, m: u64, causes: Set<(ChanId, nat, u64)>) { }
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<u64>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<u64>>, c: ChanId,
-                                   s: Seq<u64>, m: u64) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<u64>>,
+                                   was_sent: Set<(ChanId, nat, u64)>,
+                                   c: ChanId, s: Seq<u64>, m: u64,
+                                   causes: Set<(ChanId, nat, u64)>) { }
 }
 
 pub fn open_it_twice(

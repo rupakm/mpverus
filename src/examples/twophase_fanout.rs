@@ -103,8 +103,10 @@ impl NetInv<FMsg> for TpcfTok {
     proof fn lemma_cause_gives(c: ChanId, m: FMsg, causes: Set<(ChanId, nat, FMsg)>) { }
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<FMsg>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<FMsg>>, c: ChanId,
-                                   s: Seq<FMsg>, m: FMsg) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<FMsg>>,
+                                   was_sent: Set<(ChanId, nat, FMsg)>,
+                                   c: ChanId, s: Seq<FMsg>, m: FMsg,
+                                   causes: Set<(ChanId, nat, FMsg)>) { }
 }
 }
 
