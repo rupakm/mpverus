@@ -1544,16 +1544,25 @@ Phase 3 concern. Rung 1 will settle whether that reading is right.
 Two findings were confirmed but not applied, because both are design changes
 rather than cleanups.
 
-**The acceptor should be a `NetHandler` over one `Inbox`.** It currently has one
-`FanIn` per phase, so it blocks on a named proposer AND a named phase, in a
-fixed prepare-then-accept order. With one proposer that is exactly right; with
-two it deadlocks the moment they interleave, and no proof fixes that because the
-dependency is in the control flow. This is the same argument that put `collect`
-on the proposer side. The shape fits: `handle_prepare` uses a plain receive and
-`handle_accept` needs the witness, and `NetHandler::handle` supplies the witness
-as a parameter, so both bodies become receive-free and the single interference
-point moves to the driver. `Acceptor` is a `Process` today, which removes the
-bespoke loop but keeps the restriction; `Process::wf` says `np() == 1` out loud.
+**The acceptor is a `NetHandler`.** Done. It has no inbound endpoints of its
+own: every `Prepare` and `Accept` channel is a slot of the mailbox its `Driven`
+owns, and `handle` branches on the slot. That removed both pinnings at once --
+it no longer blocks on a named proposer, and the two phases are no longer
+ordered -- because both came from `FanIn::recv(k)` naming a slot where
+`recv_any` does not. `deploy_paxos_two` is the demonstration: three acceptors
+that each know two proposers, where proposer 0 never starts, so slot 0 of every
+mailbox stays silent for the whole run and proposer 1 completes a round anyway.
+
+What remains pinned is the roster: the mailbox has a fixed number of slots, so
+the set of proposers is known when the deployment is built. Taking connections
+from a set that changes needs endpoints that can travel over channels, which is
+a separate item.
+
+Two proposers running CONCURRENTLY is a liveness question and is deliberately
+not demonstrated: duelling proposers can raise ballots past each other forever
+and neither gathers a quorum, so a demo that must terminate cannot have both
+live. Safety is unaffected -- `lemma_agreement` quantifies over all ballots and
+all proposers.
 
 **`caused_by2` stays.** The simplification review established that Paxos does
 not strictly need it -- the `Accepted -> Accept` edge follows from

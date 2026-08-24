@@ -38,5 +38,10 @@ pub fn demo() {
     // it, so 42 is what the proposer is allowed to commit.
     let va = examples::paxos_system::deploy_paxos(3, 2);
     println!("paxos, second round wants 99:    committed value = {}", va);
+
+    // Acceptors that know two proposers. Proposer 0 never starts, so the first
+    // slot of every acceptor's mailbox stays silent for the whole run.
+    let vt = examples::paxos_system::deploy_paxos_two(3);
+    println!("paxos, 2 proposers, 0 silent:    committed value = {}", vt);
 }
 }

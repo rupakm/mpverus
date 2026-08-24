@@ -1230,11 +1230,24 @@ pub proof fn lemma_agreement_same_ballot(
 // protocol's conditions turn into an ordinary state invariant on a struct.
 // ---------------------------------------------------------------------------
 
+/// An acceptor.
+///
+/// It is a `NetHandler`, not a service with its own receives: every inbound
+/// channel it has -- one `Prepare` channel and one `Accept` channel per
+/// proposer -- lives in the mailbox its driver owns, and the driver hands it
+/// whichever message arrived. A service that received for itself would have to
+/// pick a proposer and a phase to block on, and would then stop serving
+/// everyone else while it waited. That is the same argument that put `collect`
+/// on the proposer side.
+///
+/// The number of proposers is still fixed when the mailbox is built. Taking
+/// connections from a set that changes needs endpoints that can travel over
+/// channels, which the model does not have yet.
 pub struct Acceptor {
     pub id: usize,
-    pub prepares:  FanIn<PMsg, Paxos>,    // p1a(p, id), one slot per proposer
+    /// How many proposers. Exec, because `handle` must branch on the slot.
+    pub n_prop: usize,
     pub promises:  FanOut<PMsg, Paxos>,   // p1b(p, id)
-    pub accepts:   FanIn<PMsg, Paxos>,    // p2a(p, id)
     pub accepteds: FanOut<PMsg, Paxos>,   // p2b(p, id)
     pub log:       Out<PMsg, Paxos>,      // alog(id) -- the one channel it owns alone
     /// The highest ballot promised, and the last value accepted.
@@ -1245,21 +1258,16 @@ pub struct Acceptor {
 }
 
 impl Acceptor {
-    pub open spec fn np(&self) -> nat { self.prepares.len() }
+    pub open spec fn np(&self) -> nat { self.n_prop as nat }
 
     pub open spec fn inv(&self) -> bool {
-        &&& self.prepares.wf() && self.promises.wf()
-        &&& self.accepts.wf() && self.accepteds.wf()
+        &&& self.promises.wf() && self.accepteds.wf()
         &&& self.log.wf() && self.log.id() == alog(self.id as int)
-        &&& self.promises.len() == self.np() && self.accepts.len() == self.np()
-        &&& self.accepteds.len() == self.np() && self.np() > 0
-        &&& self.prepares.ids@  =~= Seq::new(self.np(), |p: int| p1a(p, self.id as int))
+        &&& self.promises.len() == self.np() && self.accepteds.len() == self.np()
+        &&& self.np() > 0
         &&& self.promises.ids@  =~= Seq::new(self.np(), |p: int| p1b(p, self.id as int))
-        &&& self.accepts.ids@   =~= Seq::new(self.np(), |p: int| p2a(p, self.id as int))
         &&& self.accepteds.ids@ =~= Seq::new(self.np(), |p: int| p2b(p, self.id as int))
-        &&& self.prepares.iid() == self.log.iid()
         &&& self.promises.iid() == self.log.iid()
-        &&& self.accepts.iid() == self.log.iid()
         &&& self.accepteds.iid() == self.log.iid()
         // THE STATE INVARIANT. These three lines are what discharge the gate on
         // the log at every send below.
@@ -1277,12 +1285,19 @@ impl Acceptor {
             }
     }
 
-    /// Phase one: answer a Prepare from proposer `k`.
-    pub fn handle_prepare(&mut self, k: usize)
-        requires old(self).inv(), k < old(self).np(),
-        ensures  final(self).inv(), final(self).np() == old(self).np(),
+    /// Phase one: answer a Prepare that arrived from proposer `k`.
+    ///
+    /// No receive. The message and its provenance come from the driver, which
+    /// is what lets the acceptor answer whichever proposer spoke.
+    pub fn on_prepare(&mut self, k: usize, m: PMsg)
+        requires
+            old(self).inv(), k < old(self).np(),
+            Paxos::wit_inv(p1a(k as int, old(self).id as int), m),
+        ensures
+            final(self).inv(), final(self).np() == old(self).np(),
+            final(self).id == old(self).id,
+            final(self).log.iid() == old(self).log.iid(),
     {
-        let m = self.prepares.recv(k);
         match m {
             PMsg::Prepare(b) => {
                 if ballot_lt(self.max_bal, b) {
@@ -1331,16 +1346,26 @@ impl Acceptor {
         }
     }
 
-    /// Phase two: answer an Accept from proposer `k`.
+    /// Phase two: answer an Accept that arrived from proposer `k`.
     ///
-    /// Two witnesses are needed here: the `Accept` that arrived justifies the
-    /// log entry, and the log entry AND the `Accept` together justify the
-    /// `Accepted` sent back. That is what `send_general` is for.
-    pub fn handle_accept(&mut self, k: usize)
-        requires old(self).inv(), k < old(self).np(),
-        ensures  final(self).inv(), final(self).np() == old(self).np(),
+    /// Two witnesses are needed: the `Accept` that arrived justifies the log
+    /// entry, and the log entry AND the `Accept` together justify the
+    /// `Accepted` sent back.
+    pub fn on_accept(
+        &mut self, k: usize, m: PMsg,
+        Tracked(w_acc): Tracked<NetSM::was_sent<PMsg, Paxos>>,
+    )
+        requires
+            old(self).inv(), k < old(self).np(),
+            Paxos::wit_inv(p2a(k as int, old(self).id as int), m),
+            w_acc.instance_id() == old(self).log.iid(),
+            w_acc.element().0 == p2a(k as int, old(self).id as int),
+            w_acc.element().2 == m,
+        ensures
+            final(self).inv(), final(self).np() == old(self).np(),
+            final(self).id == old(self).id,
+            final(self).log.iid() == old(self).log.iid(),
     {
-        let (m, Tracked(w_acc)) = self.accepts.recv_wit(k);
         match m {
             PMsg::Accept(b, v) => {
                 if !ballot_lt(b, self.max_bal) {
@@ -1348,7 +1373,6 @@ impl Acceptor {
                     proof {
                         lemma_chan_shapes(k as int, self.id as int);
                         lemma_alog_shape(self.id as int);
-                        assert(self.accepts.id(k as int) == p2a(k as int, self.id as int));
                         assert(ble(self.max_bal, b));
                         assert forall|x: int| 0 <= x < h0.len()
                             implies ((#[trigger] h0[x]) is LPromise
@@ -1385,10 +1409,6 @@ impl Acceptor {
                     } by {
                         if x < h0.len() {
                             assert(self.log.hist()[x] == h0[x]);
-                            if h0[x] is LPromise {
-                            }
-                            if h0[x] is LAccept {
-                            }
                         }
                     }
                     assert(self.log.hist()[h0.len() as int] == PMsg::LAccept(b, v));
@@ -1399,21 +1419,37 @@ impl Acceptor {
     }
 }
 
-/// The acceptor as a driveable service.
-///
-/// One round is answer phase one, then answer phase two. That order is forced
-/// by using one `FanIn` per phase: the acceptor blocks on a named proposer and
-/// a named phase rather than on whatever arrives. With one proposer that is
-/// exactly right, and it is what `deploy_paxos` runs; with several it would
-/// deadlock the moment two proposers interleaved. The fix is a mailbox and a
-/// `NetHandler`, the same argument that put `collect` on the proposer side --
-/// see `docs/plan.md`.
-impl Process for Acceptor {
-    open spec fn wf(&self) -> bool { self.inv() && self.np() == 1 }
+/// The acceptor's mailbox: every `Prepare` channel, then every `Accept`
+/// channel. Slot `k` is proposer `k`'s Prepare; slot `n + k` is its Accept.
+pub open spec fn acc_chans(id: int, n: nat) -> Seq<ChanId> {
+    Seq::new(n, |p: int| p1a(p, id)) + Seq::new(n, |p: int| p2a(p, id))
+}
 
-    fn step(&mut self) {
-        self.handle_prepare(0);
-        self.handle_accept(0);
+impl NetHandler<PMsg, Paxos> for Acceptor {
+    open spec fn wf(&self) -> bool { self.inv() }
+
+    open spec fn iid(&self) -> InstanceId { self.log.iid() }
+
+    open spec fn chans(&self) -> Seq<ChanId> { acc_chans(self.id as int, self.np()) }
+
+    /// An acceptor never speaks first.
+    fn tick(&mut self) { }
+
+    /// The slot says which phase and which proposer. Nothing else does: the
+    /// two phases are not ordered, and no proposer is waited on.
+    fn handle(&mut self, from: usize, m: PMsg, Tracked(w): Tracked<NetSM::was_sent<PMsg, Paxos>>) {
+        if from < self.n_prop {
+            proof {
+                assert(self.chans()[from as int] == p1a(from as int, self.id as int));
+            }
+            self.on_prepare(from, m);
+        } else {
+            let k = from - self.n_prop;
+            proof {
+                assert(self.chans()[from as int] == p2a(k as int, self.id as int));
+            }
+            self.on_accept(k, m, Tracked(w));
+        }
     }
 }
 
