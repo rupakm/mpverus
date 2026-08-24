@@ -186,19 +186,19 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
     }
 
     let h0 = vstd::thread::spawn(move ||
-        requires acc0.inv() && acc0.np() == 1,
-        { serve(acc0, rounds); });
+        requires acc0.wf(),
+        { let mut a = acc0; run(&mut a, rounds); });
     let h1 = vstd::thread::spawn(move ||
-        requires acc1.inv() && acc1.np() == 1,
-        { serve(acc1, rounds); });
+        requires acc1.wf(),
+        { let mut a = acc1; run(&mut a, rounds); });
 
     // The third acceptor runs only if this deployment says it is up. When it
     // is not, it is built and dropped: its channels exist and the proposer
     // still writes to them, but nobody ever reads.
     let h2 = if live == 3 {
         Some(vstd::thread::spawn(move ||
-            requires acc2.inv() && acc2.np() == 1,
-            { serve(acc2, rounds); }))
+            requires acc2.wf(),
+            { let mut a = acc2; run(&mut a, rounds); }))
     } else {
         None
     };
@@ -230,22 +230,6 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
         None => { }
     }
     v
-}
-
-/// An acceptor's whole life: answer phase one and phase two, once per round.
-fn serve(a: Acceptor, rounds: usize)
-    requires a.inv(), a.np() == 1,
-{
-    let mut a = a;
-    let mut i: usize = 0;
-    while i < rounds
-        invariant a.inv(), a.np() == 1,
-        decreases rounds - i,
-    {
-        a.handle_prepare(0);
-        a.handle_accept(0);
-        i = i + 1;
-    }
 }
 
 /// One acceptor, wired to the single proposer.

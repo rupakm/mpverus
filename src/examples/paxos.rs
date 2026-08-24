@@ -1347,6 +1347,24 @@ impl Acceptor {
     }
 }
 
+/// The acceptor as a driveable service.
+///
+/// One round is answer phase one, then answer phase two. That order is forced
+/// by using one `FanIn` per phase: the acceptor blocks on a named proposer and
+/// a named phase rather than on whatever arrives. With one proposer that is
+/// exactly right, and it is what `deploy_paxos` runs; with several it would
+/// deadlock the moment two proposers interleaved. The fix is a mailbox and a
+/// `NetHandler`, the same argument that put `collect` on the proposer side --
+/// see `docs/plan.md`.
+impl Process for Acceptor {
+    open spec fn wf(&self) -> bool { self.inv() && self.np() == 1 }
+
+    fn step(&mut self) {
+        self.handle_prepare(0);
+        self.handle_accept(0);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The proposer, as running code
 // ---------------------------------------------------------------------------

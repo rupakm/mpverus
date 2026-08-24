@@ -1538,3 +1538,35 @@ On reflection it is not, for the concrete proof: gathering in arrival order with
 a loop invariant over a growing set of repliers is an ordinary loop invariant.
 It would be needed to state the gathering as ONE abstract action, which is a
 Phase 3 concern. Rung 1 will settle whether that reading is right.
+
+## Carried forward from the simplification review
+
+Two findings were confirmed but not applied, because both are design changes
+rather than cleanups.
+
+**The acceptor should be a `NetHandler` over one `Inbox`.** It currently has one
+`FanIn` per phase, so it blocks on a named proposer AND a named phase, in a
+fixed prepare-then-accept order. With one proposer that is exactly right; with
+two it deadlocks the moment they interleave, and no proof fixes that because the
+dependency is in the control flow. This is the same argument that put `collect`
+on the proposer side. The shape fits: `handle_prepare` uses a plain receive and
+`handle_accept` needs the witness, and `NetHandler::handle` supplies the witness
+as a parameter, so both bodies become receive-free and the single interference
+point moves to the driver. `Acceptor` is a `Process` today, which removes the
+bespoke loop but keeps the restriction; `Process::wf` says `np() == 1` out loud.
+
+**A macro for the constant part of a `NetInv` impl.** Six of the eight protocols
+have all eleven required lemmas empty and the same nine spec bodies -- about
+thirty lines a protocol author copies before writing any protocol. Trait
+defaults are the wrong mechanism (a default spec body can be taken at a use site
+instead of the impl's, which is what cost an afternoon in `paxos.rs`), so this
+would have to be `macro_rules!`. It does not currently work: `verus!` leaves a
+macro invocation for rustc to expand afterwards, so a macro producing `open spec
+fn` items does not parse; wrapping the expansion in a nested `verus!` inside the
+impl block parses but erases the spec functions' parameters, so the generated
+signatures no longer match the trait. Worth revisiting when Verus supports
+item-level macros inside `verus!`.
+
+**`system.rs` builds its fans in a loop** and pays about fifty lines of
+bookkeeping that `FanOut::add` and `FanIn::add` now absorb. Untouched because it
+is outside the branch.
