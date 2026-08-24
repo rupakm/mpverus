@@ -170,6 +170,10 @@ pub open spec fn log_ok(p: int, h: Seq<PMsg>) -> bool {
         ==> blt(#[trigger] h[x]->Decided_0, #[trigger] h[y]->Decided_0)
 }
 
+/// "This channel is some acceptor's Accepted channel." Says it by equality
+/// rather than by picking apart the name, so `wit_inv` can be instantiated.
+pub open spec fn is_p2b(c: ChanId) -> bool { c == p2b(c.ix[0], c.ix[1]) }
+
 pub struct Paxos;
 
 impl NetInv<PMsg> for Paxos {
@@ -283,6 +287,54 @@ impl NetInv<PMsg> for Paxos {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<PMsg>, m: PMsg) { }
 
     proof fn lemma_cause_gives(c: ChanId, m: PMsg, causes: Set<(ChanId, nat, PMsg)>) { }
+
+    /// THE CROSS-PARTICIPANT FACT: every `Accepted` an acceptor ever sent is
+    /// answering an `Accept` the proposer really sent to it.
+    ///
+    /// No gate can see this -- it relates two channels -- and it is provable
+    /// only because the send that produced the `Accepted` had to present the
+    /// witness for the `Accept`.
+    ///
+    /// Stated over the RECORD rather than over the histories. Over `sent` this
+    /// same fact needs a map insertion and sequence indices at every step, and
+    /// did not go through; here preservation concerns one element.
+    open spec fn extra_w(was_sent: Set<(ChanId, nat, PMsg)>) -> bool {
+        forall|c: ChanId, i: nat, m: PMsg|
+            (#[trigger] was_sent.contains((c, i, m))) && is_p2b(c)
+                ==> exists|j: nat| was_sent.contains(
+                        (p2a(c.ix[0], c.ix[1]), j,
+                         PMsg::Accept(m->Accepted_0, m->Accepted_1)))
+    }
+
+    proof fn lemma_extra_w_init() { }
+
+    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, PMsg)>,
+                                     c: ChanId, i: nat, m: PMsg,
+                                     causes: Set<(ChanId, nat, PMsg)>) {
+        let post = was_sent.insert((c, i, m));
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_p2b(k)
+            implies exists|j: nat| post.contains(
+                (p2a(k.ix[0], k.ix[1]), j, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))) by {
+            if (k, x, mm) == (c, i, m) {
+                // The new one. `wit_inv` says this channel carries only
+                // `Accepted`, so the send needed a cause, and `caused_by`
+                // named the witness the sender presented.
+                assert(mm is Accepted);
+                assert(c.fam == 4) by { assert(k == p2b(k.ix[0], k.ix[1])); }
+                assert(Self::needs_cause(c, m));
+                let j0 = choose|j: nat| causes.contains(
+                    (p2a(c.ix[0], c.ix[1]), j, PMsg::Accept(m->Accepted_0, m->Accepted_1)));
+                assert(post.contains(
+                    (p2a(k.ix[0], k.ix[1]), j0, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
+            } else {
+                let jj = choose|j: nat| was_sent.contains(
+                    (p2a(k.ix[0], k.ix[1]), j, PMsg::Accept(mm->Accepted_0, mm->Accepted_1)));
+                assert(post.contains(
+                    (p2a(k.ix[0], k.ix[1]), jj, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
+            }
+        }
+    }
 
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
 

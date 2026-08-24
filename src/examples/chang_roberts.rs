@@ -155,6 +155,14 @@ impl NetInv<Elect> for CrTok {
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Elect) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Elect, causes: Set<(ChanId, nat, Elect)>) { }
+    // No cross-channel property to state over the record.
+    open spec fn extra_w(was_sent: Set<(ChanId, nat, Elect)>) -> bool { true }
+    proof fn lemma_extra_w_init() { }
+
+    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Elect)>,
+                                     c: ChanId, i: nat, m: Elect,
+                                     causes: Set<(ChanId, nat, Elect)>) { }
+
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Elect>>, c: ChanId) { }
     proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Elect>>,

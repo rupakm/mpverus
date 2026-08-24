@@ -68,6 +68,14 @@ impl NetInv<Beat> for HbTok {
     open spec fn needs_cause(c: ChanId, m: Beat) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) { }
 
+    // No cross-channel property to state over the record.
+    open spec fn extra_w(was_sent: Set<(ChanId, nat, Beat)>) -> bool { true }
+    proof fn lemma_extra_w_init() { }
+
+    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Beat)>,
+                                     c: ChanId, i: nat, m: Beat,
+                                     causes: Set<(ChanId, nat, Beat)>) { }
+
     proof fn lemma_extra_init(chans: Set<ChanId>) {
         let s0 = Map::new(chans, |c: ChanId| Seq::<Beat>::empty());
         if s0.dom().contains(link()) { assert(s0[link()].len() == 0); }
