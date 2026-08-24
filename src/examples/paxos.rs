@@ -198,20 +198,29 @@ pub open spec fn promised(
 /// `v` was not chosen freely: a quorum promised `b`, and `v` is the value of the
 /// highest report among them -- or nobody reported anything, and `v` is free.
 /// This is what a proposer must present witnesses for before it may commit.
+/// One quorum's worth of that obligation. Split out because the same matrix
+/// otherwise has to be written again at every site that needs the witness, and
+/// a `choose` only matches text.
+pub open spec fn backs_at(
+    ws: Set<(ChanId, nat, PMsg)>, p: int, b: Ballot, v: u64, q: Set<int>,
+) -> bool {
+    &&& is_quorum(q)
+    &&& (forall|a: int| q.contains(a)
+            ==> exists|had: bool, ab: Ballot, av: u64| promised(ws, p, a, b, had, ab, av))
+    &&& (
+        (forall|a: int, ab: Ballot, av: u64|
+            !(q.contains(a) && promised(ws, p, a, b, true, ab, av)))
+        || (exists|a0: int, ab0: Ballot|
+                q.contains(a0) && promised(ws, p, a0, b, true, ab0, v)
+                && forall|a: int, ab: Ballot, av: u64|
+                    q.contains(a) && promised(ws, p, a, b, true, ab, av) ==> ble(ab, ab0))
+      )
+}
+
 pub open spec fn quorum_backs(
     ws: Set<(ChanId, nat, PMsg)>, p: int, b: Ballot, v: u64,
 ) -> bool {
-    exists|q: Set<int>| is_quorum(q)
-        && (forall|a: int| q.contains(a)
-                ==> exists|had: bool, ab: Ballot, av: u64| promised(ws, p, a, b, had, ab, av))
-        && (
-            (forall|a: int, ab: Ballot, av: u64|
-                !(q.contains(a) && promised(ws, p, a, b, true, ab, av)))
-            || (exists|a0: int, ab0: Ballot|
-                    q.contains(a0) && promised(ws, p, a0, b, true, ab0, v)
-                    && forall|a: int, ab: Ballot, av: u64|
-                        q.contains(a) && promised(ws, p, a, b, true, ab, av) ==> ble(ab, ab0))
-          )
+    exists|q: Set<int>| backs_at(ws, p, b, v, q)
 }
 
 /// Every commitment is backed by such a quorum.
@@ -271,6 +280,21 @@ pub open spec fn rec_decided_unique(ws: Set<(ChanId, nat, PMsg)>) -> bool {
 }
 
 pub struct Paxos;
+
+/// A witness already in the record survives one more entry being added.
+///
+/// Five of `record_inv`'s clauses back a message with a witness on some other
+/// channel, and each has to say this in the case where the new entry is not
+/// the one in question. Said once here instead.
+pub proof fn lemma_witness_mono(
+    ws: Set<(ChanId, nat, PMsg)>, e: (ChanId, nat, PMsg), d: ChanId, m: PMsg,
+)
+    requires exists|j: nat| ws.contains((d, j, m)),
+    ensures  exists|j: nat| ws.insert(e).contains((d, j, m)),
+{
+    let j0 = choose|j: nat| ws.contains((d, j, m));
+    assert(ws.insert(e).contains((d, j0, m)));
+}
 
 impl NetInv<PMsg> for Paxos {
     open spec fn gate(c: ChanId, s: Seq<PMsg>, m: PMsg) -> bool {
@@ -469,10 +493,8 @@ impl NetInv<PMsg> for Paxos {
                 assert(post.contains(
                     (pdec(k.ix[0]), j0, PMsg::Decided(mm->Accept_0, mm->Accept_1))));
             } else {
-                let jj = choose|j2: nat| was_sent.contains(
-                    (pdec(k.ix[0]), j2, PMsg::Decided(mm->Accept_0, mm->Accept_1)));
-                assert(post.contains(
-                    (pdec(k.ix[0]), jj, PMsg::Decided(mm->Accept_0, mm->Accept_1))));
+                lemma_witness_mono(was_sent, e, pdec(k.ix[0]),
+                    PMsg::Decided(mm->Accept_0, mm->Accept_1));
             }
         }
 
@@ -492,12 +514,9 @@ impl NetInv<PMsg> for Paxos {
                     PMsg::LPromise(mm->Promise_0, mm->Promise_1,
                                    mm->Promise_2, mm->Promise_3))));
             } else {
-                let jj = choose|j2: nat| was_sent.contains((alog(k.ix[1]), j2,
+                lemma_witness_mono(was_sent, e, alog(k.ix[1]),
                     PMsg::LPromise(mm->Promise_0, mm->Promise_1,
-                                   mm->Promise_2, mm->Promise_3)));
-                assert(post.contains((alog(k.ix[1]), jj,
-                    PMsg::LPromise(mm->Promise_0, mm->Promise_1,
-                                   mm->Promise_2, mm->Promise_3))));
+                                   mm->Promise_2, mm->Promise_3));
             }
         }
         assert forall|k: ChanId, x: nat, mm: PMsg|
@@ -512,10 +531,8 @@ impl NetInv<PMsg> for Paxos {
                 assert(post.contains((alog(k.ix[1]), j0,
                     PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))));
             } else {
-                let jj = choose|j2: nat| was_sent.contains((alog(k.ix[1]), j2,
-                    PMsg::LAccept(mm->Accepted_0, mm->Accepted_1)));
-                assert(post.contains((alog(k.ix[1]), jj,
-                    PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))));
+                lemma_witness_mono(was_sent, e, alog(k.ix[1]),
+                    PMsg::LAccept(mm->Accepted_0, mm->Accepted_1));
             }
         }
 
@@ -540,10 +557,8 @@ impl NetInv<PMsg> for Paxos {
                 assert(post.contains(
                     (k, x0 as nat, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3))));
             } else {
-                let jj = choose|j2: nat| was_sent.contains(
-                    (k, j2, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3)));
-                assert(post.contains(
-                    (k, jj, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3))));
+                lemma_witness_mono(was_sent, e, k,
+                    PMsg::LAccept(mm->LPromise_2, mm->LPromise_3));
             }
         }
 
@@ -573,12 +588,8 @@ impl NetInv<PMsg> for Paxos {
                     (p2a(mm->LAccept_0.prop as int, k.ix[0]), j0,
                      PMsg::Accept(mm->LAccept_0, mm->LAccept_1))));
             } else {
-                let jj = choose|j2: nat| was_sent.contains(
-                    (p2a(mm->LAccept_0.prop as int, k.ix[0]), j2,
-                     PMsg::Accept(mm->LAccept_0, mm->LAccept_1)));
-                assert(post.contains(
-                    (p2a(mm->LAccept_0.prop as int, k.ix[0]), jj,
-                     PMsg::Accept(mm->LAccept_0, mm->LAccept_1))));
+                lemma_witness_mono(was_sent, e, p2a(mm->LAccept_0.prop as int, k.ix[0]),
+                    PMsg::Accept(mm->LAccept_0, mm->LAccept_1));
             }
         }
 
@@ -837,17 +848,7 @@ pub proof fn lemma_quorum_backs_mono(
     ensures
         quorum_backs(ws2, p, b, v),
 {
-    let q = choose|q: Set<int>| is_quorum(q)
-        && (forall|a: int| q.contains(a)
-                ==> exists|had: bool, ab: Ballot, av: u64| promised(ws1, p, a, b, had, ab, av))
-        && (
-            (forall|a: int, ab: Ballot, av: u64|
-                !(q.contains(a) && promised(ws1, p, a, b, true, ab, av)))
-            || (exists|a0: int, ab0: Ballot|
-                    q.contains(a0) && promised(ws1, p, a0, b, true, ab0, v)
-                    && forall|a: int, ab: Ballot, av: u64|
-                        q.contains(a) && promised(ws1, p, a, b, true, ab, av) ==> ble(ab, ab0))
-          );
+    let q = choose|q: Set<int>| backs_at(ws1, p, b, v, q);
 
     assert forall|a: int| q.contains(a)
         implies exists|had: bool, ab: Ballot, av: u64| promised(ws2, p, a, b, had, ab, av) by {
@@ -880,6 +881,7 @@ pub proof fn lemma_quorum_backs_mono(
         assert(ws2.contains((p1b(p, a0), i0, PMsg::Promise(b, true, ab0, v))));
         assert(promised(ws2, p, a0, b, true, ab0, v));
     }
+    assert(backs_at(ws2, p, b, v, q));
 }
 
 /// Acceptor `a` accepted `(b, v)`: it said so on the channel back to `b`'s
@@ -889,9 +891,13 @@ pub open spec fn accepted(ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, v: u6
 }
 
 /// `v` is chosen at ballot `b`: a quorum of acceptors accepted it.
+/// One quorum's worth of "chosen": every member of `q` accepted `(b, v)`.
+pub open spec fn chosen_by(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64, q: Set<int>) -> bool {
+    is_quorum(q) && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v)
+}
+
 pub open spec fn chosen(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64) -> bool {
-    exists|q: Set<int>| is_quorum(q)
-        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v)
+    exists|q: Set<int>| chosen_by(ws, b, v, q)
 }
 
 /// Quorums exist. Without this the safety theorem could be vacuously true for
@@ -952,6 +958,7 @@ pub proof fn lemma_gathered_backs(
         assert(forall|a: int, ab: Ballot, av: u64|
             !(q.contains(a) && promised(cs, p, a, b, true, ab, av)));
     }
+    assert(backs_at(cs, p, b, v, q));
 }
 
 /// A proposer committed `(b, v)`. The ballot names its proposer, so the log is
@@ -1024,19 +1031,8 @@ pub proof fn lemma_safe_at(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64)
         let di = choose|i: nat| ws.contains((pdec(p), i, PMsg::Decided(b, v)));
         assert(quorum_backs(ws, p, b, v));
 
-        let q = choose|q: Set<int>| is_quorum(q)
-            && (forall|a: int| q.contains(a)
-                    ==> exists|had: bool, ab: Ballot, av: u64| promised(ws, p, a, b, had, ab, av))
-            && (
-                (forall|a: int, ab: Ballot, av: u64|
-                    !(q.contains(a) && promised(ws, p, a, b, true, ab, av)))
-                || (exists|a0: int, ab0: Ballot|
-                        q.contains(a0) && promised(ws, p, a0, b, true, ab0, v)
-                        && forall|a: int, ab: Ballot, av: u64|
-                            q.contains(a) && promised(ws, p, a, b, true, ab, av) ==> ble(ab, ab0))
-              );
-        let q2 = choose|q2: Set<int>| is_quorum(q2)
-            && forall|a: int| q2.contains(a) ==> accepted(ws, a, b2, v2);
+        let q = choose|q: Set<int>| backs_at(ws, p, b, v, q);
+        let q2 = choose|q2: Set<int>| chosen_by(ws, b2, v2, q2);
 
         // Some acceptor is in both quorums.
         lemma_quorum_intersect(q, q2);
@@ -1127,8 +1123,7 @@ pub proof fn lemma_chosen_decided(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u6
     requires Paxos::record_inv(ws), chosen(ws, b, v),
     ensures  decided(ws, b, v),
 {
-    let q = choose|q: Set<int>| is_quorum(q)
-        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v);
+    let q = choose|q: Set<int>| chosen_by(ws, b, v, q);
     lemma_quorum_nonempty(q);
     let a = choose|a: int| q.contains(a);
     lemma_accepted_decided(ws, a, b, v);
@@ -1170,10 +1165,8 @@ pub proof fn lemma_agreement_same_ballot(
     ensures
         v1 == v2,
 {
-    let q1 = choose|q: Set<int>| is_quorum(q)
-        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v1);
-    let q2 = choose|q: Set<int>| is_quorum(q)
-        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v2);
+    let q1 = choose|q: Set<int>| chosen_by(ws, b, v1, q);
+    let q2 = choose|q: Set<int>| chosen_by(ws, b, v2, q);
     lemma_quorum_nonempty(q1);
     lemma_quorum_nonempty(q2);
     let a1 = choose|a: int| q1.contains(a);
