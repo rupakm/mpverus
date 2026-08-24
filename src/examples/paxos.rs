@@ -193,6 +193,122 @@ pub open spec fn rec_accept_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
                     (pdec(c.ix[0]), j, PMsg::Decided(m->Accept_0, m->Accept_1)))
 }
 
+pub open spec fn is_alog(c: ChanId) -> bool { c == alog(c.ix[0]) }
+pub open spec fn is_p1b(c: ChanId) -> bool { c == p1b(c.ix[0], c.ix[1]) }
+
+/// Every promise an acceptor sent is backed by an entry in its own log.
+pub open spec fn rec_promise_logged(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_p1b(c)
+            ==> exists|j: nat| ws.contains((alog(c.ix[1]), j,
+                    PMsg::LPromise(m->Promise_0, m->Promise_1, m->Promise_2, m->Promise_3)))
+}
+
+/// And every acceptance likewise.
+pub open spec fn rec_accepted_logged(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_p2b(c)
+            ==> exists|j: nat| ws.contains((alog(c.ix[1]), j,
+                    PMsg::LAccept(m->Accepted_0, m->Accepted_1)))
+}
+
+/// The acceptor's ordering protocol, carried in the RECORD rather than in the
+/// history.
+///
+/// The record stores an index with every message, so it can express order --
+/// which is not obvious, and is what lets the whole Paxos argument live in one
+/// domain instead of straddling `history_inv` and `record_inv`. Preserving it
+/// needs the gate and the history, which `lemma_record_inv_preserved` now
+/// receives.
+pub open spec fn rec_alog_ok(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m1: PMsg, j: nat, m2: PMsg|
+        (#[trigger] ws.contains((c, i, m1))) && (#[trigger] ws.contains((c, j, m2)))
+        && is_alog(c) && i < j
+            ==> {
+                &&& (m1 is LPromise && m2 is LPromise
+                        ==> blt(m1->LPromise_0, m2->LPromise_0))
+                &&& (m1 is LPromise && m2 is LAccept
+                        ==> ble(m1->LPromise_0, m2->LAccept_0))
+                &&& (m1 is LAccept && m2 is LPromise
+                        ==> m2->LPromise_1 && ble(m1->LAccept_0, m2->LPromise_2))
+                &&& (m2 is LPromise && m2->LPromise_1
+                        ==> blt(m2->LPromise_2, m2->LPromise_0))
+            }
+}
+
+/// A promise the acceptor sent to proposer `p`.
+pub open spec fn promised(
+    ws: Set<(ChanId, nat, PMsg)>, p: int, a: int, b: Ballot, had: bool, ab: Ballot, av: u64,
+) -> bool {
+    exists|i: nat| ws.contains((p1b(p, a), i, PMsg::Promise(b, had, ab, av)))
+}
+
+/// THE PROPOSER'S PHASE-ONE OBLIGATION.
+///
+/// `v` was not chosen freely: a quorum promised `b`, and `v` is the value of the
+/// highest report among them -- or nobody reported anything, and `v` is free.
+/// This is what a proposer must present witnesses for before it may commit.
+pub open spec fn quorum_backs(
+    ws: Set<(ChanId, nat, PMsg)>, p: int, b: Ballot, v: u64,
+) -> bool {
+    exists|q: Set<int>| is_quorum(q)
+        && (forall|a: int| q.contains(a)
+                ==> exists|had: bool, ab: Ballot, av: u64| promised(ws, p, a, b, had, ab, av))
+        && (
+            (forall|a: int, ab: Ballot, av: u64|
+                !(q.contains(a) && promised(ws, p, a, b, true, ab, av)))
+            || (exists|a0: int, ab0: Ballot|
+                    q.contains(a0) && promised(ws, p, a0, b, true, ab0, v)
+                    && forall|a: int, ab: Ballot, av: u64|
+                        q.contains(a) && promised(ws, p, a, b, true, ab, av) ==> ble(ab, ab0))
+          )
+}
+
+/// Every commitment is backed by such a quorum.
+pub open spec fn rec_decided_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_pdec(c) && m is Decided
+            ==> quorum_backs(ws, c.ix[0], m->Decided_0, m->Decided_1)
+}
+
+/// A promise reports strictly below the ballot it promises. A fact about ONE
+/// entry, so it cannot live in the pairwise clause -- which is where it was
+/// first written, and why it was unavailable for a log with a single entry.
+pub open spec fn rec_promise_strict(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_alog(c) && m is LPromise && m->LPromise_1
+            ==> blt(m->LPromise_2, m->LPromise_0)
+}
+
+/// And it reports an acceptance the acceptor really made. Establishing this in
+/// record-land needs the record to be COMPLETE with respect to the histories:
+/// the gate saw the acceptance in the history, and completeness is what puts it
+/// in the record.
+pub open spec fn rec_report_logged(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_alog(c) && m is LPromise && m->LPromise_1
+            ==> exists|j: nat| ws.contains(
+                    (c, j, PMsg::LAccept(m->LPromise_2, m->LPromise_3)))
+}
+
+/// One position of one channel carries one message. Immediate from the
+/// machine's agreement invariant, but needed in record-land where the
+/// histories are not in scope.
+pub open spec fn rec_functional(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m1: PMsg, m2: PMsg|
+        (#[trigger] ws.contains((c, i, m1))) && (#[trigger] ws.contains((c, i, m2)))
+            ==> m1 == m2
+}
+
+/// Every acceptance an acceptor logged answers an `Accept` it was sent.
+pub open spec fn rec_laccept_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_alog(c) && m is LAccept
+            ==> exists|j: nat| ws.contains(
+                    (p2a(m->LAccept_0.prop as int, c.ix[0]), j,
+                     PMsg::Accept(m->LAccept_0, m->LAccept_1)))
+}
+
 /// A proposer commits at most one value per ballot. The log's strictly
 /// increasing ballots are what make this true, so it is a fact about ONE
 /// channel read back through the record.
@@ -218,6 +334,17 @@ impl NetInv<PMsg> for Paxos {
         // it. Everything the acceptor sends is licensed by an entry here.
         &&& (forall|a: int| c == #[trigger] alog(a) ==> {
                 &&& (m is LPromise || m is LAccept)
+                // A report must name an acceptance this acceptor really made,
+                // and one strictly below the ballot being promised. That is
+                // faithful: an acceptor promises `b` only when `b` exceeds
+                // everything it has promised, and it never accepts below a
+                // promise, so anything it has accepted is below `b`. It is also
+                // what makes the safety induction decrease.
+                &&& (m is LPromise && m->LPromise_1 ==> {
+                        &&& blt(m->LPromise_2, m->LPromise_0)
+                        &&& exists|x: int| 0 <= x < s.len()
+                                && s[x] == PMsg::LAccept(m->LPromise_2, m->LPromise_3)
+                    })
                 &&& (m is LPromise ==> forall|x: int| 0 <= x < s.len() ==> {
                         &&& ((#[trigger] s[x]) is LPromise
                                 ==> blt(s[x]->LPromise_0, m->LPromise_0))
@@ -259,19 +386,38 @@ impl NetInv<PMsg> for Paxos {
     /// An `Accept` must point at the proposer's own commitment; an `Accepted`
     /// must point at the `Accept` it answers.
     open spec fn needs_cause(c: ChanId, m: PMsg) -> bool {
-        (c.fam == 3 && m is Accept) || (c.fam == 4 && m is Accepted)
+        (is_p2a(c) && m is Accept)
+            || (is_p2b(c) && m is Accepted)
+            || (is_p1b(c) && m is Promise)
+            || (is_alog(c) && m is LAccept)
+            || (is_pdec(c) && m is Decided)
     }
 
+    /// Each of these derives the channel it points at from `c`, so a
+    /// participant cannot present somebody else's message.
     open spec fn caused_by(c: ChanId, m: PMsg, causes: Set<(ChanId, nat, PMsg)>) -> bool {
-        if c.fam == 3 {
-            // Accept on p2a(p, a) points at Decided on the proposer's own log.
-            exists|j: nat| causes.contains(
-                (pdec(c.ix[0]), j, PMsg::Decided(m->Accept_0, m->Accept_1)))
-        } else {
-            // Accepted on p2b(p, a) points at the Accept that arrived.
-            exists|j: nat| causes.contains(
-                (p2a(c.ix[0], c.ix[1]), j, PMsg::Accept(m->Accepted_0, m->Accepted_1)))
-        }
+        &&& (is_p2a(c) ==> exists|j: nat| causes.contains(
+                (pdec(c.ix[0]), j, PMsg::Decided(m->Accept_0, m->Accept_1))))
+        &&& (is_p2b(c) ==> {
+                // An acceptance answers an Accept AND is recorded in the
+                // acceptor's own log.
+                &&& exists|j: nat| causes.contains(
+                        (p2a(c.ix[0], c.ix[1]), j,
+                         PMsg::Accept(m->Accepted_0, m->Accepted_1)))
+                &&& exists|j: nat| causes.contains(
+                        (alog(c.ix[1]), j,
+                         PMsg::LAccept(m->Accepted_0, m->Accepted_1)))
+            })
+        // A commitment must present a quorum of promises. `causes` has the same
+        // type as the record, so the obligation is literally the same predicate.
+        &&& (is_pdec(c) && m is Decided
+                ==> quorum_backs(causes, c.ix[0], m->Decided_0, m->Decided_1))
+        &&& (is_alog(c) && m is LAccept ==> exists|j: nat| causes.contains(
+                (p2a(m->LAccept_0.prop as int, c.ix[0]), j,
+                 PMsg::Accept(m->LAccept_0, m->LAccept_1))))
+        &&& (is_p1b(c) ==> exists|j: nat| causes.contains(
+                (alog(c.ix[1]), j,
+                 PMsg::LPromise(m->Promise_0, m->Promise_1, m->Promise_2, m->Promise_3))))
     }
 
     open spec fn cause_gives(c: ChanId, m: PMsg) -> bool { true }
@@ -332,6 +478,14 @@ impl NetInv<PMsg> for Paxos {
         &&& rec_accepted_backed(was_sent)
         &&& rec_accept_backed(was_sent)
         &&& rec_decided_unique(was_sent)
+        &&& rec_alog_ok(was_sent)
+        &&& rec_promise_logged(was_sent)
+        &&& rec_accepted_logged(was_sent)
+        &&& rec_laccept_backed(was_sent)
+        &&& rec_functional(was_sent)
+        &&& rec_decided_backed(was_sent)
+        &&& rec_promise_strict(was_sent)
+        &&& rec_report_logged(was_sent)
     }
 
     proof fn lemma_record_inv_init() { }
@@ -382,6 +536,163 @@ impl NetInv<PMsg> for Paxos {
                     (pdec(k.ix[0]), j2, PMsg::Decided(mm->Accept_0, mm->Accept_1)));
                 assert(post.contains(
                     (pdec(k.ix[0]), jj, PMsg::Decided(mm->Accept_0, mm->Accept_1))));
+            }
+        }
+
+        // ---- promises and acceptances are in the acceptor's own log ----
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_p1b(k)
+            implies exists|j2: nat| post.contains((alog(k.ix[1]), j2,
+                PMsg::LPromise(mm->Promise_0, mm->Promise_1,
+                               mm->Promise_2, mm->Promise_3))) by {
+            if (k, x, mm) == e {
+                assert(mm is Promise);
+                assert(Self::needs_cause(c, m));
+                let j0 = choose|j2: nat| causes.contains((alog(c.ix[1]), j2,
+                    PMsg::LPromise(m->Promise_0, m->Promise_1,
+                                   m->Promise_2, m->Promise_3)));
+                assert(post.contains((alog(k.ix[1]), j0,
+                    PMsg::LPromise(mm->Promise_0, mm->Promise_1,
+                                   mm->Promise_2, mm->Promise_3))));
+            } else {
+                let jj = choose|j2: nat| was_sent.contains((alog(k.ix[1]), j2,
+                    PMsg::LPromise(mm->Promise_0, mm->Promise_1,
+                                   mm->Promise_2, mm->Promise_3)));
+                assert(post.contains((alog(k.ix[1]), jj,
+                    PMsg::LPromise(mm->Promise_0, mm->Promise_1,
+                                   mm->Promise_2, mm->Promise_3))));
+            }
+        }
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_p2b(k)
+            implies exists|j2: nat| post.contains((alog(k.ix[1]), j2,
+                PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))) by {
+            if (k, x, mm) == e {
+                assert(mm is Accepted);
+                assert(Self::needs_cause(c, m));
+                let j0 = choose|j2: nat| causes.contains((alog(c.ix[1]), j2,
+                    PMsg::LAccept(m->Accepted_0, m->Accepted_1)));
+                assert(post.contains((alog(k.ix[1]), j0,
+                    PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))));
+            } else {
+                let jj = choose|j2: nat| was_sent.contains((alog(k.ix[1]), j2,
+                    PMsg::LAccept(mm->Accepted_0, mm->Accepted_1)));
+                assert(post.contains((alog(k.ix[1]), jj,
+                    PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))));
+            }
+        }
+
+        // ---- a promise reports strictly below, and reports something real ----
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_alog(k)
+            && mm is LPromise && mm->LPromise_1
+            implies blt(mm->LPromise_2, mm->LPromise_0) by {
+            if (k, x, mm) != e { }
+        }
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_alog(k)
+            && mm is LPromise && mm->LPromise_1
+            implies exists|j2: nat| post.contains(
+                (k, j2, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3))) by {
+            if (k, x, mm) == e {
+                // The gate saw the acceptance in the history; completeness puts
+                // it in the record.
+                let x0 = choose|x0: int| 0 <= x0 < s.len()
+                    && s[x0] == PMsg::LAccept(m->LPromise_2, m->LPromise_3);
+                assert(was_sent.contains((c, x0 as nat, s[x0])));
+                assert(post.contains(
+                    (k, x0 as nat, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3))));
+            } else {
+                let jj = choose|j2: nat| was_sent.contains(
+                    (k, j2, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3)));
+                assert(post.contains(
+                    (k, jj, PMsg::LAccept(mm->LPromise_2, mm->LPromise_3))));
+            }
+        }
+
+        // ---- one position, one message ----
+        assert forall|k: ChanId, x: nat, mm1: PMsg, mm2: PMsg|
+            (#[trigger] post.contains((k, x, mm1))) && (#[trigger] post.contains((k, x, mm2)))
+            implies mm1 == mm2 by {
+            if (k, x, mm1) == e && (k, x, mm2) != e {
+                assert(k == c && sent[c] == s && x < s.len() && s[x as int] == mm2);
+            } else if (k, x, mm2) == e && (k, x, mm1) != e {
+                assert(k == c && sent[c] == s && x < s.len() && s[x as int] == mm1);
+            }
+        }
+
+        // ---- a logged acceptance answers an Accept ----
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_alog(k) && mm is LAccept
+            implies exists|j2: nat| post.contains(
+                (p2a(mm->LAccept_0.prop as int, k.ix[0]), j2,
+                 PMsg::Accept(mm->LAccept_0, mm->LAccept_1))) by {
+            if (k, x, mm) == e {
+                assert(Self::needs_cause(c, m));
+                let j0 = choose|j2: nat| causes.contains(
+                    (p2a(m->LAccept_0.prop as int, c.ix[0]), j2,
+                     PMsg::Accept(m->LAccept_0, m->LAccept_1)));
+                assert(post.contains(
+                    (p2a(mm->LAccept_0.prop as int, k.ix[0]), j0,
+                     PMsg::Accept(mm->LAccept_0, mm->LAccept_1))));
+            } else {
+                let jj = choose|j2: nat| was_sent.contains(
+                    (p2a(mm->LAccept_0.prop as int, k.ix[0]), j2,
+                     PMsg::Accept(mm->LAccept_0, mm->LAccept_1)));
+                assert(post.contains(
+                    (p2a(mm->LAccept_0.prop as int, k.ix[0]), jj,
+                     PMsg::Accept(mm->LAccept_0, mm->LAccept_1))));
+            }
+        }
+
+        // ---- the acceptor's ordering protocol, in the record ----
+        assert forall|k: ChanId, x: nat, mm1: PMsg, y: nat, mm2: PMsg|
+            (#[trigger] post.contains((k, x, mm1))) && (#[trigger] post.contains((k, y, mm2)))
+            && is_alog(k) && x < y
+            implies {
+                &&& (mm1 is LPromise && mm2 is LPromise
+                        ==> blt(mm1->LPromise_0, mm2->LPromise_0))
+                &&& (mm1 is LPromise && mm2 is LAccept
+                        ==> ble(mm1->LPromise_0, mm2->LAccept_0))
+                &&& (mm1 is LAccept && mm2 is LPromise
+                        ==> mm2->LPromise_1 && ble(mm1->LAccept_0, mm2->LPromise_2))
+                &&& (mm2 is LPromise && mm2->LPromise_1
+                        ==> blt(mm2->LPromise_2, mm2->LPromise_0))
+            } by {
+            if (k, y, mm2) == e {
+                // The new entry, compared against an older one on the same log.
+                // The gate checked exactly this against every element of `s`,
+                // and agreement says the older witness names one of them.
+                assert(k == c && sent[c] == s);
+                assert(x < s.len() && s[x as int] == mm1);
+            } else if (k, x, mm1) == e {
+                // Impossible: the new entry is at the end, so nothing is after it.
+                assert(k == c && sent[c] == s);
+                assert(y < s.len());
+            }
+        }
+
+        // ---- every commitment is backed by a quorum of promises ----
+        //
+        // The obligation is not monotone for free: a promise arriving later
+        // could in principle beat the highest report the proposer saw. It does
+        // not, because a promise is determined by its acceptor and ballot --
+        // which is what `lemma_quorum_backs_mono` needs the three clauses
+        // already established above for.
+        assert(rec_alog_ok(post));
+        assert(rec_functional(post));
+        assert(rec_promise_logged(post));
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_pdec(k) && mm is Decided
+            implies quorum_backs(post, k.ix[0], mm->Decided_0, mm->Decided_1) by {
+            if (k, x, mm) == e {
+                assert(Self::needs_cause(c, m));
+                assert(quorum_backs(causes, c.ix[0], m->Decided_0, m->Decided_1));
+                lemma_quorum_backs_mono(causes, post, k.ix[0],
+                                        mm->Decided_0, mm->Decided_1);
+            } else {
+                lemma_quorum_backs_mono(was_sent, post, k.ix[0],
+                                        mm->Decided_0, mm->Decided_1);
             }
         }
 
@@ -549,6 +860,166 @@ pub proof fn lemma_chan_shapes(p: int, a: int)
     assert(seq![p][0] == p);
 }
 
+pub proof fn lemma_alog_shape(a: int)
+    ensures is_alog(alog(a)), alog(a).ix[0] == a,
+{
+    assert(seq![a][0] == a);
+}
+
+pub proof fn lemma_p1b_shape(p: int, a: int)
+    ensures is_p1b(p1b(p, a)), p1b(p, a).ix[0] == p, p1b(p, a).ix[1] == a,
+{
+    assert(seq![p, a, 0][0] == p);
+    assert(seq![p, a, 0][1] == a);
+}
+
+/// What acceptor `a` has in its own log.
+pub open spec fn logged_accept(ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, v: u64) -> bool {
+    exists|i: nat| ws.contains((alog(a), i, PMsg::LAccept(b, v)))
+}
+
+pub open spec fn logged_promise(
+    ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, had: bool, ab: Ballot, av: u64,
+) -> bool {
+    exists|i: nat| ws.contains((alog(a), i, PMsg::LPromise(b, had, ab, av)))
+}
+
+/// THE PHASE-ONE STEP, in record-land.
+///
+/// An acceptor that accepted `b'` and promised `b`, with `b' < b`, must have
+/// REPORTED at least `b'` in that promise. The accept has to have come first,
+/// because an acceptor never accepts below a promise -- so the promise's report
+/// covers it.
+pub proof fn lemma_log_reports_high(
+    ws: Set<(ChanId, nat, PMsg)>,
+    a: int, bp: Ballot, vp: u64, b: Ballot, had: bool, ab: Ballot, av: u64,
+)
+    requires
+        rec_alog_ok(ws), rec_functional(ws),
+        logged_accept(ws, a, bp, vp),
+        logged_promise(ws, a, b, had, ab, av),
+        blt(bp, b),
+    ensures
+        had && ble(bp, ab),
+{
+    lemma_alog_shape(a);
+    let i = choose|i: nat| ws.contains((alog(a), i, PMsg::LAccept(bp, vp)));
+    let j = choose|j: nat| ws.contains((alog(a), j, PMsg::LPromise(b, had, ab, av)));
+    if i == j {
+        assert(PMsg::LAccept(bp, vp) == PMsg::LPromise(b, had, ab, av));
+    } else if j < i {
+        // The acceptor would have accepted below a ballot it had promised.
+        assert(ble(b, bp));
+    }
+}
+
+/// An acceptor makes at most one promise per ballot, because its promises
+/// strictly increase.
+pub proof fn lemma_promise_unique(
+    ws: Set<(ChanId, nat, PMsg)>,
+    a: int, b: Ballot, h1: bool, ab1: Ballot, av1: u64,
+    h2: bool, ab2: Ballot, av2: u64,
+)
+    requires
+        rec_alog_ok(ws), rec_functional(ws),
+        logged_promise(ws, a, b, h1, ab1, av1),
+        logged_promise(ws, a, b, h2, ab2, av2),
+    ensures
+        h1 == h2 && ab1 == ab2 && av1 == av2,
+{
+    lemma_alog_shape(a);
+    let i = choose|i: nat| ws.contains((alog(a), i, PMsg::LPromise(b, h1, ab1, av1)));
+    let j = choose|j: nat| ws.contains((alog(a), j, PMsg::LPromise(b, h2, ab2, av2)));
+    if i < j {
+        assert(blt(b, b));
+    } else if j < i {
+        assert(blt(b, b));
+    } else {
+        assert(PMsg::LPromise(b, h1, ab1, av1) == PMsg::LPromise(b, h2, ab2, av2));
+    }
+}
+
+/// A promise message is determined by its acceptor and ballot, because the log
+/// entry behind it is.
+pub proof fn lemma_promised_unique(
+    ws: Set<(ChanId, nat, PMsg)>, p: int, a: int, b: Ballot,
+    h1: bool, ab1: Ballot, av1: u64, h2: bool, ab2: Ballot, av2: u64,
+)
+    requires
+        rec_alog_ok(ws), rec_functional(ws), rec_promise_logged(ws),
+        promised(ws, p, a, b, h1, ab1, av1),
+        promised(ws, p, a, b, h2, ab2, av2),
+    ensures
+        h1 == h2 && ab1 == ab2 && av1 == av2,
+{
+    lemma_p1b_shape(p, a);
+    let i1 = choose|i: nat| ws.contains((p1b(p, a), i, PMsg::Promise(b, h1, ab1, av1)));
+    let i2 = choose|i: nat| ws.contains((p1b(p, a), i, PMsg::Promise(b, h2, ab2, av2)));
+    let j1 = choose|j: nat| ws.contains((alog(a), j, PMsg::LPromise(b, h1, ab1, av1)));
+    let j2 = choose|j: nat| ws.contains((alog(a), j, PMsg::LPromise(b, h2, ab2, av2)));
+    lemma_promise_unique(ws, a, b, h1, ab1, av1, h2, ab2, av2);
+}
+
+/// The proposer's obligation survives the record growing. It is not monotone
+/// for free -- a later promise could in principle beat the highest report --
+/// but a promise is determined by its acceptor and ballot, so there is no
+/// later promise to find.
+pub proof fn lemma_quorum_backs_mono(
+    ws1: Set<(ChanId, nat, PMsg)>, ws2: Set<(ChanId, nat, PMsg)>,
+    p: int, b: Ballot, v: u64,
+)
+    requires
+        quorum_backs(ws1, p, b, v),
+        ws1.subset_of(ws2),
+        rec_alog_ok(ws2), rec_functional(ws2), rec_promise_logged(ws2),
+    ensures
+        quorum_backs(ws2, p, b, v),
+{
+    let q = choose|q: Set<int>| is_quorum(q)
+        && (forall|a: int| q.contains(a)
+                ==> exists|had: bool, ab: Ballot, av: u64| promised(ws1, p, a, b, had, ab, av))
+        && (
+            (forall|a: int, ab: Ballot, av: u64|
+                !(q.contains(a) && promised(ws1, p, a, b, true, ab, av)))
+            || (exists|a0: int, ab0: Ballot|
+                    q.contains(a0) && promised(ws1, p, a0, b, true, ab0, v)
+                    && forall|a: int, ab: Ballot, av: u64|
+                        q.contains(a) && promised(ws1, p, a, b, true, ab, av) ==> ble(ab, ab0))
+          );
+
+    assert forall|a: int| q.contains(a)
+        implies exists|had: bool, ab: Ballot, av: u64| promised(ws2, p, a, b, had, ab, av) by {
+        let (h, x, y) = choose|had: bool, ab: Ballot, av: u64| promised(ws1, p, a, b, had, ab, av);
+        let i = choose|i: nat| ws1.contains((p1b(p, a), i, PMsg::Promise(b, h, x, y)));
+        assert(ws2.contains((p1b(p, a), i, PMsg::Promise(b, h, x, y))));
+        assert(promised(ws2, p, a, b, h, x, y));
+    }
+
+    // Anything the larger record says about this quorum's promises for `b`, the
+    // smaller one already said.
+    assert forall|a: int, ab: Ballot, av: u64|
+        q.contains(a) && promised(ws2, p, a, b, true, ab, av)
+        implies promised(ws1, p, a, b, true, ab, av) by {
+        let (h, x, y) = choose|had: bool, ab2: Ballot, av2: u64|
+            promised(ws1, p, a, b, had, ab2, av2);
+        let i = choose|i: nat| ws1.contains((p1b(p, a), i, PMsg::Promise(b, h, x, y)));
+        assert(ws2.contains((p1b(p, a), i, PMsg::Promise(b, h, x, y))));
+        assert(promised(ws2, p, a, b, h, x, y));
+        lemma_promised_unique(ws2, p, a, b, h, x, y, true, ab, av);
+    }
+
+    if !(forall|a: int, ab: Ballot, av: u64|
+            !(q.contains(a) && promised(ws1, p, a, b, true, ab, av))) {
+        let (a0, ab0) = choose|a0: int, ab0: Ballot|
+            q.contains(a0) && promised(ws1, p, a0, b, true, ab0, v)
+            && forall|a: int, ab: Ballot, av: u64|
+                q.contains(a) && promised(ws1, p, a, b, true, ab, av) ==> ble(ab, ab0);
+        let i0 = choose|i: nat| ws1.contains((p1b(p, a0), i, PMsg::Promise(b, true, ab0, v)));
+        assert(ws2.contains((p1b(p, a0), i0, PMsg::Promise(b, true, ab0, v))));
+        assert(promised(ws2, p, a0, b, true, ab0, v));
+    }
+}
+
 /// Acceptor `a` accepted `(b, v)`: it said so on the channel back to `b`'s
 /// proposer.
 pub open spec fn accepted(ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, v: u64) -> bool {
@@ -561,6 +1032,15 @@ pub open spec fn chosen(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64) -> bool
         && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v)
 }
 
+/// Quorums exist. Without this the safety theorem could be vacuously true for
+/// want of anything ever being chosen.
+pub proof fn lemma_all_is_quorum()
+    ensures is_quorum(acceptors()),
+{
+    acc_config();
+    lemma_acceptors();
+}
+
 /// A quorum is not empty.
 pub proof fn lemma_quorum_nonempty(q: Set<int>)
     requires is_quorum(q),
@@ -569,6 +1049,134 @@ pub proof fn lemma_quorum_nonempty(q: Set<int>)
     lemma_acceptors();
     if !(exists|a: int| q.contains(a)) {
         assert(q =~= Set::<int>::empty());
+    }
+}
+
+/// A proposer committed `(b, v)`. The ballot names its proposer, so the log is
+/// determined.
+pub open spec fn decided(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64) -> bool {
+    exists|i: nat| ws.contains((pdec(b.prop as int), i, PMsg::Decided(b, v)))
+}
+
+/// Anything an acceptor logged as accepted was committed by its proposer.
+pub proof fn lemma_logged_accept_decided(
+    ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, v: u64,
+)
+    requires Paxos::record_inv(ws), logged_accept(ws, a, b, v),
+    ensures  decided(ws, b, v),
+{
+    lemma_alog_shape(a);
+    lemma_chan_shapes(b.prop as int, a);
+    let i = choose|i: nat| ws.contains((alog(a), i, PMsg::LAccept(b, v)));
+    let j = choose|j: nat| ws.contains(
+        (p2a(b.prop as int, a), j, PMsg::Accept(b, v)));
+    let k = choose|k: nat| ws.contains(
+        (pdec(b.prop as int), k, PMsg::Decided(b, v)));
+}
+
+/// And anything a quorum accepted was likewise committed.
+pub proof fn lemma_accepted_decided(
+    ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, v: u64,
+)
+    requires Paxos::record_inv(ws), accepted(ws, a, b, v),
+    ensures  decided(ws, b, v), logged_accept(ws, a, b, v),
+{
+    lemma_chan_shapes(b.prop as int, a);
+    let i = choose|i: nat| ws.contains(
+        (p2b(b.prop as int, a), i, PMsg::Accepted(b, v)));
+    let j = choose|j: nat| ws.contains((alog(a), j, PMsg::LAccept(b, v)));
+    lemma_logged_accept_decided(ws, a, b, v);
+}
+
+/// Two commitments at one ballot agree.
+pub proof fn lemma_one_value_per_ballot_dec(
+    ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v1: u64, v2: u64,
+)
+    requires Paxos::record_inv(ws), decided(ws, b, v1), decided(ws, b, v2),
+    ensures  v1 == v2,
+{
+    lemma_chan_shapes(b.prop as int, 0);
+    let i1 = choose|i: nat| ws.contains((pdec(b.prop as int), i, PMsg::Decided(b, v1)));
+    let i2 = choose|i: nat| ws.contains((pdec(b.prop as int), i, PMsg::Decided(b, v2)));
+    assert(PMsg::Decided(b, v1) == PMsg::Decided(b, v2));
+}
+
+/// SAFETY AT A BALLOT.
+///
+/// If a proposer committed `(b, v)`, then no earlier ballot chose anything but
+/// `v`. This is the half of Paxos that phase one exists for, and the induction
+/// is on the ballot: the proposer's value came from the highest report among a
+/// quorum, that report names a strictly earlier ballot, and the claim at that
+/// ballot is the induction hypothesis.
+pub proof fn lemma_safe_at(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64)
+    requires
+        Paxos::record_inv(ws),
+        decided(ws, b, v),
+    ensures
+        forall|b2: Ballot, v2: u64| blt(b2, b) && chosen(ws, b2, v2) ==> v == v2,
+    decreases b.round, b.prop,
+{
+    assert forall|b2: Ballot, v2: u64| blt(b2, b) && chosen(ws, b2, v2) implies v == v2 by {
+        let p = b.prop as int;
+        lemma_chan_shapes(p, 0);
+        let di = choose|i: nat| ws.contains((pdec(p), i, PMsg::Decided(b, v)));
+        assert(quorum_backs(ws, p, b, v));
+
+        let q = choose|q: Set<int>| is_quorum(q)
+            && (forall|a: int| q.contains(a)
+                    ==> exists|had: bool, ab: Ballot, av: u64| promised(ws, p, a, b, had, ab, av))
+            && (
+                (forall|a: int, ab: Ballot, av: u64|
+                    !(q.contains(a) && promised(ws, p, a, b, true, ab, av)))
+                || (exists|a0: int, ab0: Ballot|
+                        q.contains(a0) && promised(ws, p, a0, b, true, ab0, v)
+                        && forall|a: int, ab: Ballot, av: u64|
+                            q.contains(a) && promised(ws, p, a, b, true, ab, av) ==> ble(ab, ab0))
+              );
+        let q2 = choose|q2: Set<int>| is_quorum(q2)
+            && forall|a: int| q2.contains(a) ==> accepted(ws, a, b2, v2);
+
+        // Some acceptor is in both quorums.
+        lemma_quorum_intersect(q, q2);
+        let a = choose|a: int| q.contains(a) && q2.contains(a);
+
+        // It accepted (b2, v2) and it promised b.
+        lemma_accepted_decided(ws, a, b2, v2);
+        let (had, ab, av) = choose|had: bool, ab: Ballot, av: u64|
+            promised(ws, p, a, b, had, ab, av);
+        lemma_p1b_shape(p, a);
+        let pi = choose|i: nat| ws.contains((p1b(p, a), i, PMsg::Promise(b, had, ab, av)));
+        let li = choose|j: nat| ws.contains((alog(a), j, PMsg::LPromise(b, had, ab, av)));
+
+        // So its promise reported at least b2 -- in particular it reported.
+        lemma_log_reports_high(ws, a, b2, v2, b, had, ab, av);
+        assert(promised(ws, p, a, b, true, ab, av));
+
+        // The proposer therefore took its value from a maximal report.
+        let (a0, ab0) = choose|a0: int, ab0: Ballot|
+            q.contains(a0) && promised(ws, p, a0, b, true, ab0, v)
+            && forall|a3: int, ab3: Ballot, av3: u64|
+                q.contains(a3) && promised(ws, p, a3, b, true, ab3, av3) ==> ble(ab3, ab0);
+        assert(ble(ab, ab0));
+        assert(ble(b2, ab0));
+
+        // That report names a real acceptance, at a strictly earlier ballot.
+        lemma_p1b_shape(p, a0);
+        let p0 = choose|i: nat| ws.contains((p1b(p, a0), i, PMsg::Promise(b, true, ab0, v)));
+        let l0 = choose|j: nat| ws.contains((alog(a0), j, PMsg::LPromise(b, true, ab0, v)));
+        lemma_alog_shape(a0);
+        assert(blt(ab0, b));
+        let lj = choose|j: nat| ws.contains((alog(a0), j, PMsg::LAccept(ab0, v)));
+        assert(logged_accept(ws, a0, ab0, v));
+        lemma_logged_accept_decided(ws, a0, ab0, v);
+
+        // Induction at that earlier ballot.
+        if b2 == ab0 {
+            // Same ballot: one commitment per ballot settles it.
+            lemma_one_value_per_ballot_dec(ws, ab0, v, v2);
+        } else {
+            lemma_safe_at(ws, ab0, v);
+        }
     }
 }
 
@@ -612,6 +1220,50 @@ pub proof fn lemma_one_value_per_ballot(
     assert(PMsg::Decided(b, v1) == PMsg::Decided(b, v2));
 }
 
+/// Anything chosen was committed by its proposer.
+pub proof fn lemma_chosen_decided(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64)
+    requires Paxos::record_inv(ws), chosen(ws, b, v),
+    ensures  decided(ws, b, v),
+{
+    let q = choose|q: Set<int>| is_quorum(q)
+        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v);
+    lemma_quorum_nonempty(q);
+    let a = choose|a: int| q.contains(a);
+    lemma_accepted_decided(ws, a, b, v);
+}
+
+/// Ballots are totally ordered, because they are pairs of integers.
+pub proof fn lemma_ballot_total(x: Ballot, y: Ballot)
+    ensures x == y || blt(x, y) || blt(y, x),
+{
+}
+
+/// AGREEMENT.
+///
+/// Two values chosen -- at any ballots, by any quorums -- are equal. This is
+/// the safety property Paxos exists for.
+pub proof fn lemma_agreement(
+    ws: Set<(ChanId, nat, PMsg)>, b1: Ballot, v1: u64, b2: Ballot, v2: u64,
+)
+    requires
+        Paxos::record_inv(ws),
+        chosen(ws, b1, v1),
+        chosen(ws, b2, v2),
+    ensures
+        v1 == v2,
+{
+    lemma_ballot_total(b1, b2);
+    if b1 == b2 {
+        lemma_agreement_same_ballot(ws, b1, v1, v2);
+    } else if blt(b2, b1) {
+        lemma_chosen_decided(ws, b1, v1);
+        lemma_safe_at(ws, b1, v1);
+    } else {
+        lemma_chosen_decided(ws, b2, v2);
+        lemma_safe_at(ws, b2, v2);
+    }
+}
+
 /// AGREEMENT AT A BALLOT: two values chosen at the same ballot are equal.
 pub proof fn lemma_agreement_same_ballot(
     ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v1: u64, v2: u64,
@@ -635,34 +1287,42 @@ pub proof fn lemma_agreement_same_ballot(
 }
 
 // ---------------------------------------------------------------------------
-// WHAT IS AND IS NOT PROVED
+// WHAT IS PROVED
 //
-// PROVED: agreement at a ballot. Two values chosen at the same ballot are
-// equal, and more strongly, whatever any two acceptors accepted at one ballot
-// was the same value. That runs a chain of three cross-participant hops --
-// Accepted answers Accept, Accept is backed by the proposer's commitment, a
-// proposer commits once per ballot -- each licensed by a witness the sender was
-// required to present. It needs no quorum reasoning at all.
+// AGREEMENT: `lemma_agreement`. Two values chosen -- at any ballots, by any
+// quorums -- are equal. That is the safety property Paxos exists for.
 //
-// PROVED, and waiting to be used: the acceptor's local protocol, its export as
-// a pure pairwise fact (`lemma_promise_reports_high`), and quorum intersection
-// (`lemma_quorum_intersect`). Those are the two halves of the phase-one
-// argument.
+// The argument runs entirely in RECORD-land: every fact is about `was_sent`,
+// the monotone record of what was ever sent, rather than about the histories.
+// That was the decision that made it tractable. The record carries an index
+// with every message, so it can express order as well as existence, and its
+// invariants need only be preserved against one new element at a time.
 //
-// NOT PROVED: agreement ACROSS ballots -- that a value chosen at `b` is the
-// only value any later ballot can choose. This is the half of Paxos that phase
-// one exists for, and it needs two things this file does not yet have.
+// The chain, from the bottom:
 //
-//   1. `Decided(b, v)` must be justified by a QUORUM of promises for `b`, with
-//      `v` the value of the highest report among them. The framework admits
-//      this -- `caused_by` takes a set of causes precisely so that a quorum can
-//      justify a message -- but the gate and the causes are not written.
+//   * an acceptor's log is its whole local protocol on one owned channel:
+//     promises increase, it never accepts below a promise, and a promise
+//     reports the highest ballot it has accepted, strictly below the one it
+//     promises;
+//   * every message a participant sends points back at the entry that
+//     licensed it -- Accepted at Accept and at its own log, Accept at the
+//     proposer's commitment, Promise at its own log;
+//   * a commitment points at a QUORUM of promises, with the value taken from
+//     the highest report among them;
+//   * two majorities of a finite set intersect, so the acceptor that carries
+//     an earlier chosen value into the new proposer's view always exists;
+//   * and the induction on ballots closes it, the report naming a strictly
+//     earlier ballot at which the claim is the induction hypothesis.
 //
-//   2. An induction over ballots. The proposer's value came from the highest
-//      reported ballot `bm < b`, and concluding it agrees with a value chosen
-//      at `b' <= bm` is the induction hypothesis at `bm`. Verus can carry this
-//      with `decreases b.round, b.prop`, but it has not been attempted.
+// Each of the four essential ingredients was checked by breaking it: letting a
+// proposer pick any value, letting quorums be any set, letting a promise
+// under-report, and letting an acceptor accept below a promise. All four fail
+// to verify. `lemma_all_is_quorum` rules out the remaining way the theorem
+// could be hollow, which is quorums being impossible.
 //
-// Neither is a limitation of the framework; both are proof work.
+// NOT DONE: the services. This file proves the protocol correct; it does not
+// yet contain a `Proposer` or an `Acceptor` written against `proc.rs`. Those
+// would discharge the gates and provenance obligations at each send, which is
+// where the proof meets running code.
 
 } // verus!

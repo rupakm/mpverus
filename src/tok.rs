@@ -308,6 +308,10 @@ pub trait NetInv<M> : Sized {
             // ties the two domains together.
             forall|k: ChanId, i2: nat, mm: M| (#[trigger] was_sent.contains((k, i2, mm)))
                 ==> sent.dom().contains(k) && i2 < sent[k].len() && sent[k][i2 as int] == mm,
+            // ... and the converse: every position of every history is recorded.
+            forall|k: ChanId, i2: int|
+                sent.dom().contains(k) && 0 <= i2 < sent[k].len()
+                    ==> was_sent.contains((k, i2 as nat, #[trigger] sent[k][i2])),
             causes.subset_of(was_sent),
             Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
@@ -437,6 +441,19 @@ tokenized_state_machine!{
                 (#[trigger] self.was_sent.contains((c, i, m))) && Inv::needs_cause(c, m)
                     ==> exists|causes: Set<(ChanId, nat, M)>|
                             causes.subset_of(self.was_sent) && Inv::caused_by(c, m, causes)
+        }
+
+        /// The record is COMPLETE: every position of every history is in it.
+        ///
+        /// `agree` says a witness names a real position; this says every real
+        /// position has a witness. Both directions are needed to move a fact
+        /// between the two domains, and only one of them was stated until a
+        /// protocol needed the other.
+        #[invariant]
+        pub spec fn complete(&self) -> bool {
+            forall|c: ChanId, i: int|
+                self.sent.dom().contains(c) && 0 <= i < self.sent[c].len()
+                    ==> self.was_sent.contains((c, i as nat, #[trigger] self.sent[c][i]))
         }
 
         #[invariant]
