@@ -114,59 +114,43 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
     }
 
     // The sixteen channels.
-    let tracked (s, r) = (sm.remove(pdec(0)), rm.remove(pdec(0)));
-    let (dec_out, _dec_in) = open_channel::<PMsg, Paxos>(
-        Ghost(pdec(0)), Tracked(&inst), Tracked(s), Tracked(r));
+    let (dec_out, _dec_in) = take_channel::<PMsg, Paxos>(
+        Ghost(pdec(0)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
 
-    let tracked (s, r) = (sm.remove(alog(0)), rm.remove(alog(0)));
-    let (al0_out, _al0_in) = open_channel::<PMsg, Paxos>(
-        Ghost(alog(0)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(alog(1)), rm.remove(alog(1)));
-    let (al1_out, _al1_in) = open_channel::<PMsg, Paxos>(
-        Ghost(alog(1)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(alog(2)), rm.remove(alog(2)));
-    let (al2_out, _al2_in) = open_channel::<PMsg, Paxos>(
-        Ghost(alog(2)), Tracked(&inst), Tracked(s), Tracked(r));
+    let (al0_out, _al0_in) = take_channel::<PMsg, Paxos>(
+        Ghost(alog(0)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (al1_out, _al1_in) = take_channel::<PMsg, Paxos>(
+        Ghost(alog(1)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (al2_out, _al2_in) = take_channel::<PMsg, Paxos>(
+        Ghost(alog(2)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
 
-    let tracked (s, r) = (sm.remove(p1a(0, 0)), rm.remove(p1a(0, 0)));
-    let (q1a0_out, q1a0_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p1a(0, 0)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p1a(0, 1)), rm.remove(p1a(0, 1)));
-    let (q1a1_out, q1a1_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p1a(0, 1)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p1a(0, 2)), rm.remove(p1a(0, 2)));
-    let (q1a2_out, q1a2_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p1a(0, 2)), Tracked(&inst), Tracked(s), Tracked(r));
+    let (q1a0_out, q1a0_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p1a(0, 0)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q1a1_out, q1a1_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p1a(0, 1)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q1a2_out, q1a2_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p1a(0, 2)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
 
-    let tracked (s, r) = (sm.remove(p1b(0, 0)), rm.remove(p1b(0, 0)));
-    let (q1b0_out, q1b0_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p1b(0, 0)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p1b(0, 1)), rm.remove(p1b(0, 1)));
-    let (q1b1_out, q1b1_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p1b(0, 1)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p1b(0, 2)), rm.remove(p1b(0, 2)));
-    let (q1b2_out, q1b2_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p1b(0, 2)), Tracked(&inst), Tracked(s), Tracked(r));
+    let (q1b0_out, q1b0_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p1b(0, 0)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q1b1_out, q1b1_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p1b(0, 1)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q1b2_out, q1b2_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p1b(0, 2)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
 
-    let tracked (s, r) = (sm.remove(p2a(0, 0)), rm.remove(p2a(0, 0)));
-    let (q2a0_out, q2a0_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p2a(0, 0)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p2a(0, 1)), rm.remove(p2a(0, 1)));
-    let (q2a1_out, q2a1_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p2a(0, 1)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p2a(0, 2)), rm.remove(p2a(0, 2)));
-    let (q2a2_out, q2a2_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p2a(0, 2)), Tracked(&inst), Tracked(s), Tracked(r));
+    let (q2a0_out, q2a0_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p2a(0, 0)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q2a1_out, q2a1_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p2a(0, 1)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q2a2_out, q2a2_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p2a(0, 2)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
 
-    let tracked (s, r) = (sm.remove(p2b(0, 0)), rm.remove(p2b(0, 0)));
-    let (q2b0_out, _q2b0_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p2b(0, 0)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p2b(0, 1)), rm.remove(p2b(0, 1)));
-    let (q2b1_out, _q2b1_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p2b(0, 1)), Tracked(&inst), Tracked(s), Tracked(r));
-    let tracked (s, r) = (sm.remove(p2b(0, 2)), rm.remove(p2b(0, 2)));
-    let (q2b2_out, _q2b2_in) = open_channel::<PMsg, Paxos>(
-        Ghost(p2b(0, 2)), Tracked(&inst), Tracked(s), Tracked(r));
+    let (q2b0_out, _q2b0_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p2b(0, 0)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q2b1_out, _q2b1_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p2b(0, 1)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
+    let (q2b2_out, _q2b2_in) = take_channel::<PMsg, Paxos>(
+        Ghost(p2b(0, 2)), Tracked(&inst), Tracked(&mut sm), Tracked(&mut rm));
 
     // The three acceptors. Each names one proposer, so every vector has one
     // slot; the shapes are what `Acceptor::inv` asks for.
@@ -176,10 +160,10 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
 
     // The proposer. Promises arrive on a mailbox, so phase one takes whichever
     // two answer first.
-    let mut preps: Vec<Out<PMsg, Paxos>> = Vec::new();
-    preps.push(q1a0_out); preps.push(q1a1_out); preps.push(q1a2_out);
-    let mut accs: Vec<Out<PMsg, Paxos>> = Vec::new();
-    accs.push(q2a0_out); accs.push(q2a1_out); accs.push(q2a2_out);
+    let mut preps = FanOut::<PMsg, Paxos>::new();
+    preps.add(q1a0_out); preps.add(q1a1_out); preps.add(q1a2_out);
+    let mut accs = FanOut::<PMsg, Paxos>::new();
+    accs.add(q2a0_out); accs.add(q2a1_out); accs.add(q2a2_out);
 
     let tracked ip = inst.clone();
     let mut promises = Inbox::<PMsg, Paxos>::empty(Tracked(ip));
@@ -188,9 +172,9 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
     promises.add(q1b2_in);
     let mut prop = Proposer {
         id: 0,
-        prepares: FanOut { outs: preps, ids: Ghost(Seq::new(3nat, |a: int| p1a(0, a))) },
+        prepares: preps,
         promises,
-        accepts:  FanOut { outs: accs,  ids: Ghost(Seq::new(3nat, |a: int| p2a(0, a))) },
+        accepts:  accs,
         log: dec_out,
         // Above the acceptors' initial ballot, so phase one is not refused.
         bal: Ballot { round: 1, prop: 0 },
@@ -284,16 +268,13 @@ fn build_acceptor(
         acc_in.iid()  == log.iid(), accd_out.iid() == log.iid(),
     ensures a.inv(), a.np() == 1, a.id == id,
 {
-    let mut pi: Vec<In<PMsg, Paxos>> = Vec::new();  pi.push(prep_in);
-    let mut po: Vec<Out<PMsg, Paxos>> = Vec::new(); po.push(prom_out);
-    let mut ai: Vec<In<PMsg, Paxos>> = Vec::new();  ai.push(acc_in);
-    let mut ao: Vec<Out<PMsg, Paxos>> = Vec::new(); ao.push(accd_out);
+    let mut pi = FanIn::<PMsg, Paxos>::new();  pi.add(prep_in);
+    let mut po = FanOut::<PMsg, Paxos>::new(); po.add(prom_out);
+    let mut ai = FanIn::<PMsg, Paxos>::new();  ai.add(acc_in);
+    let mut ao = FanOut::<PMsg, Paxos>::new(); ao.add(accd_out);
     let a = Acceptor {
         id,
-        prepares:  FanIn  { ins:  pi, ids: Ghost(Seq::new(1nat, |p: int| p1a(p, id as int))) },
-        promises:  FanOut { outs: po, ids: Ghost(Seq::new(1nat, |p: int| p1b(p, id as int))) },
-        accepts:   FanIn  { ins:  ai, ids: Ghost(Seq::new(1nat, |p: int| p2a(p, id as int))) },
-        accepteds: FanOut { outs: ao, ids: Ghost(Seq::new(1nat, |p: int| p2b(p, id as int))) },
+        prepares: pi, promises: po, accepts: ai, accepteds: ao,
         log,
         max_bal: Ballot { round: 0, prop: 0 },
         has_acc: false,

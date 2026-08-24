@@ -269,14 +269,49 @@ impl<M, Inv: NetInv<M>> FanOut<M, Inv> {
     pub open spec fn hist(&self, k: int) -> Seq<M> { self.outs@[k].hist() }
     pub open spec fn iid(&self) -> InstanceId { self.outs@[0].iid() }
 
-    pub open spec fn wf(&self) -> bool {
-        &&& self.outs.len() > 0
+    /// Everything except being non-empty, so a fan can be built slot by slot.
+    pub open spec fn pre_wf(&self) -> bool {
         &&& self.ids@.len() == self.outs.len()
         &&& forall|k: int| 0 <= k < self.outs@.len() ==> {
                 &&& (#[trigger] self.outs@[k]).wf()
                 &&& self.outs@[k].id() == self.ids@[k]
                 &&& self.outs@[k].iid() == self.outs@[0].iid()
             }
+    }
+
+    pub open spec fn wf(&self) -> bool { self.outs.len() > 0 && self.pre_wf() }
+
+    pub fn new() -> (f: Self)
+        ensures f.pre_wf(), f.len() == 0, f.ids@ == Seq::<ChanId>::empty(),
+    { FanOut { outs: Vec::new(), ids: Ghost(Seq::empty()) } }
+
+    /// Add one outbound endpoint, in slot order. The slot's channel name is
+    /// taken from the endpoint, so a fan cannot be built with the wrong names.
+    pub fn add(&mut self, e: Out<M, Inv>)
+        requires
+            old(self).pre_wf(), e.wf(),
+            old(self).len() > 0 ==> e.iid() == old(self).iid(),
+        ensures
+            final(self).pre_wf(),
+            final(self).len() == old(self).len() + 1,
+            final(self).ids@ =~= old(self).ids@.push(e.id()),
+            old(self).len() > 0 ==> final(self).iid() == old(self).iid(),
+            old(self).len() == 0 ==> final(self).iid() == e.iid(),
+            forall|k: int| 0 <= k < old(self).len()
+                ==> #[trigger] final(self).hist(k) == old(self).hist(k),
+            final(self).hist(old(self).len() as int) == e.hist(),
+    {
+        let ghost c = e.id();
+        let ghost n0 = self.outs@.len();
+        self.outs.push(e);
+        proof { self.ids = Ghost(self.ids@.push(c)); }
+        assert forall|k: int| 0 <= k < self.outs@.len() implies {
+            &&& (#[trigger] self.outs@[k]).wf()
+            &&& self.outs@[k].id() == self.ids@[k]
+            &&& self.outs@[k].iid() == self.outs@[0].iid()
+        } by {
+            if k < n0 { assert(self.outs@[k] == old(self).outs@[k]); }
+        }
     }
 
     /// How many slots, at run time.
@@ -446,14 +481,45 @@ impl<M, Inv: NetInv<M>> FanIn<M, Inv> {
     pub open spec fn id(&self, k: int) -> ChanId { self.ids@[k] }
     pub open spec fn iid(&self) -> InstanceId { self.ins@[0].iid() }
 
-    pub open spec fn wf(&self) -> bool {
-        &&& self.ins.len() > 0
+    /// Everything except being non-empty, so a fan can be built slot by slot.
+    pub open spec fn pre_wf(&self) -> bool {
         &&& self.ids@.len() == self.ins.len()
         &&& forall|k: int| 0 <= k < self.ins@.len() ==> {
                 &&& (#[trigger] self.ins@[k]).wf()
                 &&& self.ins@[k].id() == self.ids@[k]
                 &&& self.ins@[k].iid() == self.ins@[0].iid()
             }
+    }
+
+    pub open spec fn wf(&self) -> bool { self.ins.len() > 0 && self.pre_wf() }
+
+    pub fn new() -> (f: Self)
+        ensures f.pre_wf(), f.len() == 0, f.ids@ == Seq::<ChanId>::empty(),
+    { FanIn { ins: Vec::new(), ids: Ghost(Seq::empty()) } }
+
+    /// Add one inbound endpoint, in slot order.
+    pub fn add(&mut self, e: In<M, Inv>)
+        requires
+            old(self).pre_wf(), e.wf(),
+            old(self).len() > 0 ==> e.iid() == old(self).iid(),
+        ensures
+            final(self).pre_wf(),
+            final(self).len() == old(self).len() + 1,
+            final(self).ids@ =~= old(self).ids@.push(e.id()),
+            old(self).len() > 0 ==> final(self).iid() == old(self).iid(),
+            old(self).len() == 0 ==> final(self).iid() == e.iid(),
+    {
+        let ghost c = e.id();
+        let ghost n0 = self.ins@.len();
+        self.ins.push(e);
+        proof { self.ids = Ghost(self.ids@.push(c)); }
+        assert forall|k: int| 0 <= k < self.ins@.len() implies {
+            &&& (#[trigger] self.ins@[k]).wf()
+            &&& self.ins@[k].id() == self.ids@[k]
+            &&& self.ins@[k].iid() == self.ins@[0].iid()
+        } by {
+            if k < n0 { assert(self.ins@[k] == old(self).ins@[k]); }
+        }
     }
 
     pub fn count(&self) -> (n: usize)
@@ -817,6 +883,41 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
 // ---------------------------------------------------------------------------
 // Opening a channel.
 // ---------------------------------------------------------------------------
+
+/// Take one channel's two tokens out of the boot maps and open it.
+///
+/// A deployment holds the whole `sent` and `recvd` maps and hands out one
+/// channel at a time; doing that by hand is three lines per channel and the
+/// same three lines every time. The `remove`s and the ownership argument that
+/// makes a second call impossible are `open_channel`'s, unchanged.
+///
+/// Verified, not trusted.
+pub fn take_channel<M, Inv: NetInv<M>>(
+    c: Ghost<ChanId>,
+    Tracked(inst): Tracked<&NetSM::Instance<M, Inv>>,
+    Tracked(sm): Tracked<&mut MapToken<ChanId, Seq<M>, NetSM::sent<M, Inv>>>,
+    Tracked(rm): Tracked<&mut MapToken<ChanId, Seq<M>, NetSM::recvd<M, Inv>>>,
+) -> (res: (Out<M, Inv>, In<M, Inv>))
+    requires
+        old(sm).instance_id() == inst.id(), old(sm).dom().contains(c@),
+        old(rm).instance_id() == inst.id(), old(rm).dom().contains(c@),
+    ensures
+        res.0.wf(), res.0.id() == c@, res.0.iid() == inst.id(),
+        res.0.hist() == old(sm).map()[c@],
+        res.1.wf(), res.1.id() == c@, res.1.iid() == inst.id(),
+        final(sm).map() == old(sm).map().remove(c@),
+        final(rm).map() == old(rm).map().remove(c@),
+        final(sm).instance_id() == old(sm).instance_id(),
+        final(rm).instance_id() == old(rm).instance_id(),
+{
+    let tracked stok;
+    let tracked rtok;
+    proof {
+        stok = sm.remove(c@);
+        rtok = rm.remove(c@);
+    }
+    open_channel::<M, Inv>(c, Tracked(inst), Tracked(stok), Tracked(rtok))
+}
 
 /// Give a channel its two endpoints.
 ///

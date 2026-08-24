@@ -101,50 +101,37 @@ pub fn deploy_lease() -> (accepted: bool)
     }
 
     // ---- 2. Open the five channels, taking both tokens of each.
-    let tracked sa; let tracked ra; let tracked sg; let tracked rg;
-    let tracked sw; let tracked rw; let tracked sk; let tracked rk;
-    let tracked sj; let tracked rj;
-    proof {
-        sa = sent_map.remove(acq_req(0));  ra = recvd_map.remove(acq_req(0));
-        sg = sent_map.remove(acq_rsp(0));  rg = recvd_map.remove(acq_rsp(0));
-        sw = sent_map.remove(wr_req(0));   rw = recvd_map.remove(wr_req(0));
-        sk = sent_map.remove(wr_rsp(0));   rk = recvd_map.remove(wr_rsp(0));
-        sj = sent_map.remove(journal());   rj = recvd_map.remove(journal());
-    }
-    let (acq_out, acq_in) = open_channel::<Msg, Lease>(
-        Ghost(acq_req(0)), Tracked(&inst), Tracked(sa), Tracked(ra));
-    let (grt_out, grt_in) = open_channel::<Msg, Lease>(
-        Ghost(acq_rsp(0)), Tracked(&inst), Tracked(sg), Tracked(rg));
-    let (wr_out, wr_in) = open_channel::<Msg, Lease>(
-        Ghost(wr_req(0)), Tracked(&inst), Tracked(sw), Tracked(rw));
-    let (ack_out, ack_in) = open_channel::<Msg, Lease>(
-        Ghost(wr_rsp(0)), Tracked(&inst), Tracked(sk), Tracked(rk));
-    let (jrn_out, _jrn_in) = open_channel::<Msg, Lease>(
-        Ghost(journal()), Tracked(&inst), Tracked(sj), Tracked(rj));
+    let (acq_out, acq_in) = take_channel::<Msg, Lease>(
+        Ghost(acq_req(0)), Tracked(&inst), Tracked(&mut sent_map), Tracked(&mut recvd_map));
+    let (grt_out, grt_in) = take_channel::<Msg, Lease>(
+        Ghost(acq_rsp(0)), Tracked(&inst), Tracked(&mut sent_map), Tracked(&mut recvd_map));
+    let (wr_out, wr_in) = take_channel::<Msg, Lease>(
+        Ghost(wr_req(0)), Tracked(&inst), Tracked(&mut sent_map), Tracked(&mut recvd_map));
+    let (ack_out, ack_in) = take_channel::<Msg, Lease>(
+        Ghost(wr_rsp(0)), Tracked(&inst), Tracked(&mut sent_map), Tracked(&mut recvd_map));
+    let (jrn_out, _jrn_in) = take_channel::<Msg, Lease>(
+        Ghost(journal()), Tracked(&inst), Tracked(&mut sent_map), Tracked(&mut recvd_map));
 
     // ---- 3. Build the three services. Each is handed exactly the ends it owns.
     let tracked i1 = inst.clone();
     let mut srv_inbox = Inbox::<Msg, Lease>::empty(Tracked(i1));
     srv_inbox.add(acq_in);
 
-    let mut srv_rsps: Vec<Out<Msg, Lease>> = Vec::new();
-    srv_rsps.push(grt_out);
-    let ghost srv_ids = Seq::new(1nat, |j: int| acq_rsp(j));
+    let mut srv_rsps = FanOut::<Msg, Lease>::new();
+    srv_rsps.add(grt_out);
     let mut server = LockServer {
         inbox: srv_inbox,
-        rsps: FanOut { outs: srv_rsps, ids: Ghost(srv_ids) },
+        rsps: srv_rsps,
         hi: 0, held: false, held_until: 0,
     };
 
-    let mut st_reqs: Vec<In<Msg, Lease>> = Vec::new();
-    st_reqs.push(wr_in);
-    let mut st_rsps: Vec<Out<Msg, Lease>> = Vec::new();
-    st_rsps.push(ack_out);
-    let ghost st_req_ids = Seq::new(1nat, |j: int| wr_req(j));
-    let ghost st_rsp_ids = Seq::new(1nat, |j: int| wr_rsp(j));
+    let mut st_reqs = FanIn::<Msg, Lease>::new();
+    st_reqs.add(wr_in);
+    let mut st_rsps = FanOut::<Msg, Lease>::new();
+    st_rsps.add(ack_out);
     let mut storage = StorageNode {
-        reqs: FanIn  { ins:  st_reqs, ids: Ghost(st_req_ids) },
-        rsps: FanOut { outs: st_rsps, ids: Ghost(st_rsp_ids) },
+        reqs: st_reqs,
+        rsps: st_rsps,
         jrn: jrn_out,
         hi_token: 0, hi_seq: 0, have_any: false, turn: 0,
     };
