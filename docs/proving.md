@@ -22,7 +22,7 @@ Reading order:
    refinement stack.
 5. `docs/movers.pdf` for the ideas, `docs/plan.md` for what is open.
 
-Current state: 222 verified, 0 errors, no `assume` or `admit`, nine behavioural
+Current state: 242 verified, 0 errors, no `assume` or `admit`, nine behavioural
 `external_body` declarations.
 
 ## Working method
@@ -401,33 +401,49 @@ equality** -- `c == p2b(c.ix[0], c.ix[1])` -- not by picking the name apart
 `wit_inv` cannot be instantiated at it, and the guarantee attached to the
 channel is unavailable. This cost a round trip.
 
-## Discharging `caused_by` at a call site
+## Justifying a send
 
-This is the hardest routine obligation in the framework, and the difficulty is
-entirely about matching the SYNTACTIC FORM of the definition rather than its
-meaning. Two rules, both learned the slow way in `paxos.rs`:
+`caused_by` takes a SET of causes, because a quorum may justify a message. That
+is right for the model and wrong for a call site. Discharging it for one witness
+meant restating the fact as an existential over a singleton set, in the exact
+syntactic shape the definition happened to use -- about five lines per send, and
+roughly half the proof burden of a service body.
 
-**State the existential with the definition's projections.** If `caused_by` is
-written over `m->Promise_0`, assert the existential over `mm->Promise_0`, not
-over the `b` you built `mm` from. Verus will not connect them.
+So there are three forms, and a protocol implements the ones it needs:
 
-**Bind the tuple first.** Name the tuple you are claiming membership for, assert
-`contains` of that name, and only then assert the existential:
+    caused_by1(c, m, d, j, m2)                     one cause
+    caused_by2(c, m, d1, j1, m1, d2, j2, m2)       two causes
+    caused_by(c, m, causes)                        a set -- a quorum
 
-    let tup = (alog(c.ix[1]), jw, PMsg::LPromise(mm->Promise_0, ...));
-    assert(tup == wt.element());
-    assert(set![wt.element()].contains(tup));
-    assert(exists|j: nat| set![wt.element()].contains(...));
+with `lemma_caused_by1` and `lemma_caused_by2` bridging to the set form, proved
+ONCE per protocol rather than once per send. Use the matching sender:
 
-The symptom when either is missing is memorable: **every conjunct of `caused_by`
-proves individually and the conjunction does not.** If you see that, it is not a
-logic problem.
+    out.send_caused(m, w)             needs caused_by1
+    out.send_caused2(m, w1, w2)       needs caused_by2
+    out.send_general(m, &set_token)   needs caused_by
+
+A protocol whose messages never need two causes writes `caused_by2 = false` and
+an empty lemma. Measured on the Paxos acceptor, this took the two handlers from
+84 and 102 lines to 52 and 62, with the cause ceremony going from 14 and 18
+lines to **zero**.
+
+Reach for `send_general` only for a genuine quorum. If you find yourself
+building a `SetToken` by hand for a fixed, small number of witnesses, you want
+`send_caused2`.
 
 **Trait members involved in causes have no default bodies, deliberately.**
-`needs_cause`, `caused_by` and `cause_gives` are required. A default here is
-worse than merely unreliable -- at a use site the default can be taken instead
-of the implementation, producing exactly the symptom above. A protocol with no
-cross-channel obligations writes `false` and is done.
+`needs_cause`, `caused_by`, `caused_by1`, `caused_by2` and `cause_gives` are all
+required. A default here is worse than merely unreliable: at a use site the
+default can be taken instead of the implementation, and the symptom is
+memorable -- every conjunct of the definition proves individually while the
+definition itself does not. If you ever see that, this is why.
+
+**If you must discharge the set form by hand**, two rules, both about matching
+the definition's syntactic shape rather than its meaning. State the existential
+with the definition's projections (`mm->Promise_0`), not the constructor
+arguments you built the message from. And bind the tuple you are claiming
+membership for to a name first, assert `contains` of that name, then assert the
+existential.
 
 ## Some properties are types, not proofs
 

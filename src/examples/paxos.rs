@@ -434,6 +434,59 @@ impl NetInv<PMsg> for Paxos {
                  PMsg::LPromise(m->Promise_0, m->Promise_1, m->Promise_2, m->Promise_3))))
     }
 
+    /// The per-cause form. Two of the five kinds of caused send need SEVERAL
+    /// witnesses -- an acceptance answers both an Accept and its own log entry,
+    /// and a commitment needs a whole quorum -- so a single cause never
+    /// suffices there and this is `false`. Those use `send_general`.
+    open spec fn caused_by1(c: ChanId, m: PMsg, d: ChanId, j: nat, m2: PMsg) -> bool {
+        &&& (is_p2a(c) ==> d == pdec(c.ix[0])
+                && m2 == PMsg::Decided(m->Accept_0, m->Accept_1))
+        &&& (is_p1b(c) ==> d == alog(c.ix[1])
+                && m2 == PMsg::LPromise(m->Promise_0, m->Promise_1,
+                                        m->Promise_2, m->Promise_3))
+        &&& (is_alog(c) && m is LAccept ==> d == p2a(m->LAccept_0.prop as int, c.ix[0])
+                && m2 == PMsg::Accept(m->LAccept_0, m->LAccept_1))
+        &&& !is_p2b(c)
+        &&& !(is_pdec(c) && m is Decided)
+    }
+
+    proof fn lemma_caused_by1(c: ChanId, m: PMsg, d: ChanId, j: nat, m2: PMsg) {
+        let cs = set![(d, j, m2)];
+        if is_p2a(c) {
+            assert(cs.contains(
+                (pdec(c.ix[0]), j, PMsg::Decided(m->Accept_0, m->Accept_1))));
+        }
+        if is_p1b(c) {
+            assert(cs.contains((alog(c.ix[1]), j,
+                PMsg::LPromise(m->Promise_0, m->Promise_1,
+                               m->Promise_2, m->Promise_3))));
+        }
+        if is_alog(c) && m is LAccept {
+            assert(cs.contains((p2a(m->LAccept_0.prop as int, c.ix[0]), j,
+                PMsg::Accept(m->LAccept_0, m->LAccept_1))));
+        }
+    }
+
+    /// An acceptance answers the Accept that arrived AND is recorded in the
+    /// acceptor's own log. Exactly two causes.
+    open spec fn caused_by2(c: ChanId, m: PMsg, d1: ChanId, j1: nat, m1: PMsg,
+                            d2: ChanId, j2: nat, m2: PMsg) -> bool {
+        &&& is_p2b(c)
+        &&& d1 == p2a(c.ix[0], c.ix[1])
+        &&& m1 == PMsg::Accept(m->Accepted_0, m->Accepted_1)
+        &&& d2 == alog(c.ix[1])
+        &&& m2 == PMsg::LAccept(m->Accepted_0, m->Accepted_1)
+    }
+
+    proof fn lemma_caused_by2(c: ChanId, m: PMsg, d1: ChanId, j1: nat, m1: PMsg,
+                              d2: ChanId, j2: nat, m2: PMsg) {
+        let cs = set![(d1, j1, m1), (d2, j2, m2)];
+        assert(cs.contains((p2a(c.ix[0], c.ix[1]), j1,
+            PMsg::Accept(m->Accepted_0, m->Accepted_1))));
+        assert(cs.contains((alog(c.ix[1]), j2,
+            PMsg::LAccept(m->Accepted_0, m->Accepted_1))));
+    }
+
     open spec fn cause_gives(c: ChanId, m: PMsg) -> bool { true }
 
     /// THE HEART OF PAXOS, in the form a reader can use.
@@ -1377,39 +1430,7 @@ impl Acceptor {
                         // The promise points at the entry just written: same
                         // acceptor, same content.
                         assert(self.promises.id(k as int) == p1b(k as int, self.id as int));
-                        let jw = wt.element().1;
-                        assert(wt.element() == (alog(self.id as int), jw,
-                            PMsg::LPromise(b, self.has_acc, self.acc_bal, self.acc_val)));
-                        assert(self.promises.id(k as int).ix[1] == self.id as int);
-                        let tup = (alog(self.promises.id(k as int).ix[1]), jw,
-                                   PMsg::LPromise(b, self.has_acc,
-                                                  self.acc_bal, self.acc_val));
-                        assert(tup == wt.element());
-                        assert(set![wt.element()].contains(tup));
-                        assert(exists|j: nat| set![wt.element()].contains(
-                            (alog(self.promises.id(k as int).ix[1]), j,
-                             PMsg::LPromise(b, self.has_acc, self.acc_bal, self.acc_val))));
-                        assert(!is_p2a(self.promises.id(k as int)));
-                        assert(!is_p2b(self.promises.id(k as int)));
-                        assert(is_p1b(self.promises.id(k as int)));
-                        assert(!is_pdec(self.promises.id(k as int)));
-                        assert(!is_alog(self.promises.id(k as int)));
-                        let mm = PMsg::Promise(b, self.has_acc, self.acc_bal, self.acc_val);
-                        assert(mm->Promise_0 == b);
-                        assert(mm->Promise_1 == self.has_acc);
-                        assert(mm->Promise_2 == self.acc_bal);
-                        assert(mm->Promise_3 == self.acc_val);
-                        assert(exists|j: nat| set![wt.element()].contains(
-                            (alog(self.promises.id(k as int).ix[1]), j,
-                             PMsg::LPromise(mm->Promise_0, mm->Promise_1,
-                                            mm->Promise_2, mm->Promise_3))));
-                        assert(!(PMsg::Promise(b, self.has_acc, self.acc_bal,
-                                               self.acc_val) is Decided));
                     }
-                    assert(<Paxos as NetInv<PMsg>>::caused_by(
-                        self.promises.id(k as int),
-                        PMsg::Promise(b, self.has_acc, self.acc_bal, self.acc_val),
-                        set![wt.element()]));
                     // The promise itself, pointing at that entry.
                     self.promises.send_caused(k,
                         PMsg::Promise(b, self.has_acc, self.acc_bal, self.acc_val),
@@ -1469,59 +1490,19 @@ impl Acceptor {
                             }
                         }
                         // The gate on this channel says the ballot names this
-                        // proposer, which is what makes the cause's channel
-                        // the one the witness came from.
+                        // proposer, which is what makes the cause's channel the
+                        // one the witness came from.
                         assert(b.prop as int == k as int);
-                        let mm = PMsg::LAccept(b, v);
-                        assert(mm->LAccept_0 == b && mm->LAccept_1 == v);
                         assert(self.log.id().ix[0] == self.id as int);
-                        assert(w_acc.element() ==
-                            (p2a(mm->LAccept_0.prop as int, self.log.id().ix[0]),
-                             w_acc.element().1,
-                             PMsg::Accept(mm->LAccept_0, mm->LAccept_1)));
-                        let tup2 = (p2a(mm->LAccept_0.prop as int, self.log.id().ix[0]),
-                                    w_acc.element().1,
-                                    PMsg::Accept(mm->LAccept_0, mm->LAccept_1));
-                        assert(set![w_acc.element()].contains(tup2));
-                        assert(exists|j: nat| set![w_acc.element()].contains(
-                            (p2a(mm->LAccept_0.prop as int, self.log.id().ix[0]), j,
-                             PMsg::Accept(mm->LAccept_0, mm->LAccept_1))));
                     }
                     let Tracked(w_log) = self.log.send_caused(
                         PMsg::LAccept(b, v), Tracked(&w_acc));
 
-                    let tracked cs;
                     proof {
-                        let tracked mut acc = SetToken::empty(self.log.inst@.id());
-                        acc.insert(w_acc);
-                        acc.insert(w_log);
-                        cs = acc;
-                        assert(cs.set() =~= set![w_acc.element(), w_log.element()]);
-                        let mm = PMsg::Accepted(b, v);
-                        assert(mm->Accepted_0 == b && mm->Accepted_1 == v);
                         assert(self.accepteds.id(k as int) == p2b(k as int, self.id as int));
-                        assert(self.accepteds.id(k as int).ix[0] == k as int);
-                        assert(self.accepteds.id(k as int).ix[1] == self.id as int);
-                        assert(cs.set().contains(w_acc.element()));
-                        assert(cs.set().contains(w_log.element()));
-                        assert(w_acc.element() ==
-                            (p2a(self.accepteds.id(k as int).ix[0],
-                                 self.accepteds.id(k as int).ix[1]),
-                             w_acc.element().1,
-                             PMsg::Accept(mm->Accepted_0, mm->Accepted_1)));
-                        assert(w_log.element() ==
-                            (alog(self.accepteds.id(k as int).ix[1]),
-                             w_log.element().1,
-                             PMsg::LAccept(mm->Accepted_0, mm->Accepted_1)));
-                        assert(exists|j: nat| cs.set().contains(
-                            (p2a(self.accepteds.id(k as int).ix[0],
-                                 self.accepteds.id(k as int).ix[1]), j,
-                             PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
-                        assert(exists|j: nat| cs.set().contains(
-                            (alog(self.accepteds.id(k as int).ix[1]), j,
-                             PMsg::LAccept(mm->Accepted_0, mm->Accepted_1))));
                     }
-                    self.accepteds.send_general(k, PMsg::Accepted(b, v), Tracked(&cs));
+                    self.accepteds.send_caused2(k, PMsg::Accepted(b, v),
+                                                Tracked(&w_acc), Tracked(&w_log));
 
                     self.max_bal = b;
                     self.has_acc = true;

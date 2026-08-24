@@ -239,6 +239,42 @@ pub trait NetInv<M> : Sized {
     /// several: a coordinator committing needs every vote, not one.
     spec fn caused_by(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>) -> bool;
 
+    /// What a SINGLE cause must satisfy, stated per-cause.
+    ///
+    /// `caused_by` takes a set because a quorum may justify a message. That is
+    /// right for the model and wrong for a call site: discharging it for one
+    /// witness meant restating the fact as an existential over a singleton set,
+    /// in the exact syntactic shape the definition happened to use. It came to
+    /// about five lines of scaffolding per send, and roughly half the proof
+    /// burden of a service body.
+    ///
+    /// This is the same obligation with the set removed. A protocol whose
+    /// message needs SEVERAL causes writes `false` here, and its senders use
+    /// `send_general` instead.
+    spec fn caused_by1(c: ChanId, m: M, d: ChanId, j: nat, m2: M) -> bool;
+
+    /// The bridge, proved once per protocol instead of once per send.
+    proof fn lemma_caused_by1(c: ChanId, m: M, d: ChanId, j: nat, m2: M)
+        requires
+            Self::caused_by1(c, m, d, j, m2),
+        ensures
+            Self::caused_by(c, m, set![(d, j, m2)]);
+
+    /// The same for TWO causes, which is the other common shape: a message
+    /// that answers a request AND is recorded in the sender's own log. A
+    /// protocol that never sends such a message writes `false`.
+    spec fn caused_by2(c: ChanId, m: M,
+                       d1: ChanId, j1: nat, m1: M,
+                       d2: ChanId, j2: nat, m2: M) -> bool;
+
+    proof fn lemma_caused_by2(c: ChanId, m: M,
+                              d1: ChanId, j1: nat, m1: M,
+                              d2: ChanId, j2: nat, m2: M)
+        requires
+            Self::caused_by2(c, m, d1, j1, m1, d2, j2, m2),
+        ensures
+            Self::caused_by(c, m, set![(d1, j1, m1), (d2, j2, m2)]);
+
     /// What a thread may conclude about `m` from the fact that a justification
     /// for it exists. This must mention only `c` and `m`: the justifying
     /// message is reached by an existential that the reader cannot name, so
