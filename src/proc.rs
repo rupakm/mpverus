@@ -635,6 +635,196 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
         (k, m, Tracked(w))
     }
 
+    /// How many peers this mailbox waits on.
+    pub fn count(&self) -> (r: usize)
+        ensures r == self.len(),
+    { self.rxs.len() }
+
+    /// Gather messages from `need` DISTINCT peers, in arrival order.
+    ///
+    /// This is the shape a quorum-based service actually wants. Waiting on one
+    /// peer at a time makes progress depend on every peer it names; waiting on
+    /// all of them and stopping at `need` makes progress depend only on there
+    /// being `need` live ones. A service built out of `recv` cannot be made to
+    /// tolerate a crashed peer by any amount of proof, because the dependency
+    /// is in the control flow.
+    ///
+    /// Messages that `accept` rejects, and repeats from a peer already counted,
+    /// are dropped: their consumption records are consumed and their witnesses
+    /// discarded. `accept` is the round filter -- a service running rounds must
+    /// not count a reply to a round it has left.
+    ///
+    /// The witnesses for the messages that ARE counted are accumulated into one
+    /// `SetToken`, which is what a quorum obligation is stated over. The caller
+    /// gets three facts about it: every counted message has a witness in the
+    /// set, the set holds NOTHING ELSE, and the sources are pairwise distinct.
+    /// Together those turn a quorum argument into a counting argument on
+    /// `srcs.len()`.
+    ///
+    /// `p` is the specification of `accept`. Verus cannot see inside an exec
+    /// closure, so the caller states what the closure decides and proves the
+    /// closure decides it; `collect` then reports `p` of everything it kept.
+    ///
+    /// This loop does not terminate if fewer than `need` peers ever send an
+    /// accepted message. That is the protocol's liveness assumption and is not
+    /// discharged here; safety does not depend on it. The attribute below is
+    /// the only place in the development where a termination check is waived.
+    ///
+    /// Verified, not trusted.
+    #[verifier::exec_allows_no_decreases_clause]
+    pub fn collect<F: Fn(usize, &M) -> bool>(
+        &mut self,
+        need: usize,
+        p: Ghost<spec_fn(int, M) -> bool>,
+        accept: F,
+    ) -> (res: (Vec<usize>, Vec<M>, Tracked<SetToken<(ChanId, nat, M), NetSM::was_sent<M, Inv>>>))
+        requires
+            old(self).wf(),
+            need <= old(self).rxs.len(),
+            forall|k: usize, m: &M| #[trigger] call_requires(accept, (k, m)),
+            forall|k: usize, m: &M, r: bool|
+                #[trigger] call_ensures(accept, (k, m), r) ==> r == p@(k as int, *m),
+        ensures
+            final(self).wf(),
+            final(self).iid() == old(self).iid(),
+            final(self).rxs@ == old(self).rxs@,
+            res.0.len() == need,
+            res.1.len() == need,
+            res.2@.instance_id() == final(self).iid(),
+            // Every source is a real peer, and no peer is counted twice.
+            forall|i: int| 0 <= i < need ==> #[trigger] res.0@[i] < final(self).rxs.len(),
+            forall|i: int, j: int|
+                0 <= i < need && 0 <= j < need && i != j
+                    ==> #[trigger] res.0@[i] != #[trigger] res.0@[j],
+            // Everything counted passed the filter, and has a witness.
+            forall|i: int| 0 <= i < need
+                ==> #[trigger] p@(res.0@[i] as int, res.1@[i])
+                    && Inv::wit_inv(final(self).id(res.0@[i] as int), res.1@[i])
+                    && exists|n: nat|
+                        res.2@.set().contains(
+                            (final(self).id(res.0@[i] as int), n, res.1@[i])),
+            // ... and the set holds nothing else.
+            forall|e: (ChanId, nat, M)| res.2@.set().contains(e)
+                ==> exists|i: int| 0 <= i < need
+                        && e.0 == final(self).id(#[trigger] res.0@[i] as int)
+                        && e.2 == res.1@[i],
+    {
+        let mut srcs: Vec<usize> = Vec::new();
+        let mut msgs: Vec<M> = Vec::new();
+        let tracked mut cs = SetToken::empty(self.inst@.id());
+        let ghost rxs0 = self.rxs@;
+
+        // One flag per peer, so a chatty peer cannot fill the quorum alone.
+        let n = self.rxs.len();
+        let mut seen: Vec<bool> = Vec::new();
+        while seen.len() < n
+            invariant seen.len() <= n,
+            decreases n - seen.len(),
+        {
+            seen.push(false);
+        }
+
+        while srcs.len() < need
+            invariant
+                self.wf(),
+                self.rxs@ == rxs0,
+                self.inst@.id() == old(self).iid(),
+                need <= rxs0.len(),
+                seen.len() == rxs0.len(),
+                srcs.len() == msgs.len(),
+                srcs.len() <= need,
+                cs.instance_id() == old(self).iid(),
+                forall|k: usize, m: &M| #[trigger] call_requires(accept, (k, m)),
+                forall|k: usize, m: &M, r: bool|
+                    #[trigger] call_ensures(accept, (k, m), r) ==> r == p@(k as int, *m),
+                forall|i: int| 0 <= i < srcs.len() ==> #[trigger] srcs@[i] < rxs0.len(),
+                forall|i: int| 0 <= i < srcs.len() ==> seen@[#[trigger] srcs@[i] as int],
+                forall|i: int, j: int|
+                    0 <= i < srcs.len() && 0 <= j < srcs.len() && i != j
+                        ==> #[trigger] srcs@[i] != #[trigger] srcs@[j],
+                forall|i: int| 0 <= i < srcs.len()
+                    ==> #[trigger] p@(srcs@[i] as int, msgs@[i])
+                        && Inv::wit_inv(rxs0[srcs@[i] as int].id(), msgs@[i])
+                        && exists|n: nat|
+                            cs.set().contains((rxs0[srcs@[i] as int].id(), n, msgs@[i])),
+                forall|e: (ChanId, nat, M)| cs.set().contains(e)
+                    ==> exists|i: int| 0 <= i < srcs.len()
+                            && e.0 == rxs0[#[trigger] srcs@[i] as int].id()
+                            && e.2 == msgs@[i],
+        {
+            let (k, m, Tracked(w)) = self.recv_any_wit();
+            if !seen[k] && accept(k, &m) {
+                let ghost e = w.element();
+                let ghost s0 = cs.set();
+                let ghost srcs0 = srcs@;
+                let ghost msgs0 = msgs@;
+                proof { cs.insert(w); }
+                seen.set(k, true);
+                srcs.push(k);
+                msgs.push(m);
+                proof {
+                    assert(cs.set() =~= s0.insert(e));
+                    assert(srcs@ =~= srcs0.push(k));
+                    assert(msgs@ =~= msgs0.push(m));
+                    // The new entry, and every old one, still has its witness.
+                    assert(exists|n: nat|
+                        cs.set().contains((rxs0[k as int].id(), n, m))) by {
+                        assert(cs.set().contains((rxs0[k as int].id(), e.1, m)));
+                    }
+                    assert forall|i: int| 0 <= i < srcs0.len() implies
+                        #[trigger] p@(srcs@[i] as int, msgs@[i])
+                        && Inv::wit_inv(rxs0[srcs@[i] as int].id(), msgs@[i])
+                        && exists|n: nat|
+                            cs.set().contains((rxs0[srcs@[i] as int].id(), n, msgs@[i])) by {
+                        assert(srcs@[i] == srcs0[i]);
+                        assert(msgs@[i] == msgs0[i]);
+                        assert(p@(srcs0[i] as int, msgs0[i]));
+                        let n0 = choose|n: nat|
+                            s0.contains((rxs0[srcs0[i] as int].id(), n, msgs0[i]));
+                        assert(cs.set().contains((rxs0[srcs0[i] as int].id(), n0, msgs0[i])));
+                    }
+                    // Nothing else got in: the set grew by exactly one element,
+                    // and that element is the one just pushed.
+                    assert forall|x: (ChanId, nat, M)| cs.set().contains(x) implies
+                        exists|i: int| 0 <= i < srcs@.len()
+                            && x.0 == rxs0[#[trigger] srcs@[i] as int].id()
+                            && x.2 == msgs@[i] by {
+                        if x == e {
+                            assert(srcs@[srcs0.len() as int] == k);
+                            assert(msgs@[srcs0.len() as int] == m);
+                        } else {
+                            let i0 = choose|i: int| 0 <= i < srcs0.len()
+                                && x.0 == rxs0[srcs0[i] as int].id() && x.2 == msgs0[i];
+                            assert(srcs@[i0] == srcs0[i0]);
+                            assert(msgs@[i0] == msgs0[i0]);
+                        }
+                    }
+                    // Distinctness: `k` was unmarked, every earlier source is marked.
+                    assert forall|i: int, j: int|
+                        0 <= i < srcs@.len() && 0 <= j < srcs@.len() && i != j
+                            implies #[trigger] srcs@[i] != #[trigger] srcs@[j] by {
+                        if i < srcs0.len() && j < srcs0.len() {
+                            assert(srcs@[i] == srcs0[i] && srcs@[j] == srcs0[j]);
+                        }
+                    }
+                }
+            }
+        }
+        proof {
+            assert(srcs.len() == need);
+            assert forall|i: int| 0 <= i < need implies
+                #[trigger] p@(srcs@[i] as int, msgs@[i])
+                && Inv::wit_inv(self.id(srcs@[i] as int), msgs@[i])
+                && exists|n: nat| cs.set().contains((self.id(srcs@[i] as int), n, msgs@[i])) by {
+                assert(p@(srcs@[i] as int, msgs@[i]));
+                assert(self.rxs@[srcs@[i] as int] == rxs0[srcs@[i] as int]);
+                let n0 = choose|n: nat| cs.set().contains((rxs0[srcs@[i] as int].id(), n, msgs@[i]));
+                assert(cs.set().contains((self.id(srcs@[i] as int), n0, msgs@[i])));
+            }
+        }
+        (srcs, msgs, Tracked(cs))
+    }
+
     /// Block until any peer sends, and report which. The interference point.
     pub fn recv_any(&mut self) -> (res: (usize, M))
         requires old(self).wf(),
