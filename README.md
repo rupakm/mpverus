@@ -64,7 +64,12 @@ counterexamples (each of which must be rejected, and in the right way), and the
 spikes under `spike/` — design experiments that verify but are deliberately not
 integrated.
 
-Currently 158 verified, 0 errors, no `assume` or `admit`.
+Currently 158 verified, 0 errors, no `assume` or `admit`. CI runs the same
+script on a pinned Verus version.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before changing anything, and
+[docs/proving.md](docs/proving.md) before writing proofs — it holds the rules
+that cost real time to find.
 
 `verus --compile` builds a running binary from the same source, and
 `examples/lease_system.rs` boots the lease lock, runs its three services on
