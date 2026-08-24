@@ -121,7 +121,7 @@ impl DetDelivery<Msg> for Tpc {
 /// makes ONE remote call, which -- being `L . L` -- contains no interference
 /// point at all, so the loop is a plain sequential loop.
 pub struct TpcCoordinator {
-    pub reqs: Vec<Out<Msg, Tpc>>,
+    pub reqs: FanOut<Msg, Tpc>,
     /// The channel allocator. Reply channels are created while the program
     /// runs, one per call, and freshness is the machine's business.
     pub alloc: Tracked<NetSM::next<Msg, Tpc>>,
@@ -132,14 +132,11 @@ pub struct TpcCoordinator {
 
 impl TpcCoordinator {
     pub open spec fn inv(&self) -> bool {
+        &&& self.reqs.wf()
         &&& self.reqs.len() as int == n_parts()
-        &&& self.reqs.len() > 0
         &&& self.alloc@.instance_id() == self.inst@.id()
-        &&& forall|j: int| 0 <= j < n_parts() ==> {
-                &&& (#[trigger] self.reqs@[j]).wf()
-                &&& self.reqs@[j].id() == req_chan(j)
-                &&& self.reqs@[j].iid() == self.inst@.id()
-            }
+        &&& self.reqs.iid() == self.inst@.id()
+        &&& self.reqs.ids@ =~= Seq::new(n_parts() as nat, |j: int| req_chan(j))
     }
 
     pub fn run_round(&mut self) -> (committed: bool)
@@ -152,7 +149,7 @@ impl TpcCoordinator {
         let mut i: usize = 0;
         let mut all_yes: bool = true;
 
-        while i < self.reqs.len() && all_yes
+        while i < self.reqs.count() && all_yes
             invariant
                 0 <= i <= n_parts(),
                 self.inv(),
@@ -160,9 +157,7 @@ impl TpcCoordinator {
             decreases n_parts() - i,
         {
             proof { config(); }
-            let ghost r0 = self.reqs@;
             let ghost iid = self.inst@.id();
-            assert(self.reqs@[i as int].wf());
 
             // Open this call's private reply channel.
             let (reply_out, mut reply_in) = open_new_channel::<Msg, Tpc>(
@@ -174,7 +169,7 @@ impl TpcCoordinator {
                 // Gate for the request send: a request channel is nobody's
                 // reply channel.
                 assert forall|j2: int, k2: nat|
-                    self.reqs@[i as int].id() == #[trigger] rsp_chan(j2, k2)
+                    self.reqs.id(i as int) == #[trigger] rsp_chan(j2, k2)
                     implies Msg::Prepare(Ghost(reply_in.id())) == Msg::Vote(vote(j2)) by {
                     assert(req_chan(i as int) != rsp_chan(j2, k2));
                 }
@@ -188,19 +183,9 @@ impl TpcCoordinator {
             }
 
             // One atomic action: send, absorb the handler, take the reply.
-            let m = self.reqs[i].call(
-                Msg::Prepare(Ghost(reply_in.id())), &mut reply_in,
+            let m = self.reqs.call(
+                i, Msg::Prepare(Ghost(reply_in.id())), &mut reply_in,
                 Tracked(reply_out.tok.get()), Ghost(expected));
-
-            proof {
-                assert forall|j: int| 0 <= j < n_parts() implies {
-                    &&& (#[trigger] self.reqs@[j]).wf()
-                    &&& self.reqs@[j].id() == req_chan(j)
-                    &&& self.reqs@[j].iid() == self.inst@.id()
-                } by {
-                    if j != i as int { assert(self.reqs@[j] == r0[j]); }
-                }
-            }
 
             match m {
                 Msg::Vote(b) => { if !b { all_yes = false; } }

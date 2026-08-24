@@ -132,9 +132,10 @@ pub fn deploy_lease() -> (accepted: bool)
 
     let mut srv_rsps: Vec<Out<Msg, Lease>> = Vec::new();
     srv_rsps.push(grt_out);
+    let ghost srv_ids = Seq::new(1nat, |j: int| acq_rsp(j));
     let mut server = LockServer {
         inbox: Inbox { rxs: srv_rxs, toks: Tracked(srv_toks), inst: Tracked(i1) },
-        rsps: srv_rsps,
+        rsps: FanOut { outs: srv_rsps, ids: Ghost(srv_ids) },
         hi: 0, held: false, held_until: 0,
     };
 
@@ -142,8 +143,12 @@ pub fn deploy_lease() -> (accepted: bool)
     st_reqs.push(wr_in);
     let mut st_rsps: Vec<Out<Msg, Lease>> = Vec::new();
     st_rsps.push(ack_out);
+    let ghost st_req_ids = Seq::new(1nat, |j: int| wr_req(j));
+    let ghost st_rsp_ids = Seq::new(1nat, |j: int| wr_rsp(j));
     let mut storage = StorageNode {
-        reqs: st_reqs, rsps: st_rsps, jrn: jrn_out,
+        reqs: FanIn  { ins:  st_reqs, ids: Ghost(st_req_ids) },
+        rsps: FanOut { outs: st_rsps, ids: Ghost(st_rsp_ids) },
+        jrn: jrn_out,
         hi_token: 0, hi_seq: 0, have_any: false, turn: 0,
     };
 
