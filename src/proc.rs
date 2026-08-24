@@ -151,6 +151,43 @@ impl<M, Inv: DetDelivery<M>> Out<M, Inv> {
 }
 
 impl<M, Inv: NetInv<M>> Out<M, Inv> {
+    /// Send a message justified by exactly two earlier ones.
+    pub fn send_caused2(&mut self, m: M,
+                        Tracked(c1): Tracked<&NetSM::was_sent<M, Inv>>,
+                        Tracked(c2): Tracked<&NetSM::was_sent<M, Inv>>)
+        -> (w: Tracked<NetSM::was_sent<M, Inv>>)
+        requires
+            old(self).wf(),
+            Inv::gate(old(self).id(), old(self).hist(), m),
+            c1.instance_id() == old(self).iid(),
+            c2.instance_id() == old(self).iid(),
+            Inv::caused_by2(old(self).id(), m,
+                            c1.element().0, c1.element().1, c1.element().2,
+                            c2.element().0, c2.element().1, c2.element().2),
+        ensures
+            final(self).wf(),
+            final(self).id() == old(self).id(),
+            final(self).iid() == old(self).iid(),
+            final(self).hist() == old(self).hist().push(m),
+            w@.instance_id() == final(self).iid(),
+            w@.element() == (final(self).id(), old(self).hist().len(), m),
+    {
+        let tracked cs;
+        proof {
+            Inv::lemma_caused_by2(self.tx.id(), m,
+                                  c1.element().0, c1.element().1, c1.element().2,
+                                  c2.element().0, c2.element().1, c2.element().2);
+            let tracked mut acc = SetToken::empty(self.inst@.id());
+            acc.insert(*c1);
+            acc.insert(*c2);
+            cs = acc;
+            assert(cs.set() =~= set![
+                (c1.element().0, c1.element().1, c1.element().2),
+                (c2.element().0, c2.element().1, c2.element().2)]);
+        }
+        send_general::<M, Inv>(&self.tx, m, Tracked(self.inst.borrow()),
+                               Tracked(self.tok.borrow_mut()), Tracked(&cs))
+    }
 
     /// Send a message justified by SEVERAL earlier ones -- a quorum, say.
     pub fn send_general(&mut self, m: M,
@@ -354,6 +391,42 @@ impl<M, Inv: NetInv<M>> FanOut<M, Inv> {
         w
     }
 
+    /// Send on slot `k`, justified by exactly two earlier messages.
+    pub fn send_caused2(&mut self, k: usize, m: M,
+                        Tracked(c1): Tracked<&NetSM::was_sent<M, Inv>>,
+                        Tracked(c2): Tracked<&NetSM::was_sent<M, Inv>>)
+        -> (w: Tracked<NetSM::was_sent<M, Inv>>)
+        requires
+            old(self).wf(),
+            k < old(self).len(),
+            Inv::gate(old(self).id(k as int), old(self).hist(k as int), m),
+            c1.instance_id() == old(self).iid(),
+            c2.instance_id() == old(self).iid(),
+            Inv::caused_by2(old(self).id(k as int), m,
+                            c1.element().0, c1.element().1, c1.element().2,
+                            c2.element().0, c2.element().1, c2.element().2),
+        ensures
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            final(self).hist(k as int) == old(self).hist(k as int).push(m),
+            w@.instance_id() == final(self).iid(),
+            w@.element() == (final(self).id(k as int), old(self).hist(k as int).len(), m),
+    {
+        let ghost o0 = self.outs@;
+        assert(self.outs@[k as int].wf());
+        let w = self.outs[k].send_caused2(m, Tracked(c1), Tracked(c2));
+        assert forall|j: int| 0 <= j < self.outs@.len() implies {
+            &&& (#[trigger] self.outs@[j]).wf()
+            &&& self.outs@[j].id() == self.ids@[j]
+            &&& self.outs@[j].iid() == self.outs@[0].iid()
+        } by {
+            if j != k as int { assert(self.outs@[j] == o0[j]); }
+            if k as int != 0 { assert(self.outs@[0] == o0[0]); }
+        }
+        w
+    }
 
     /// Send on slot `k`, justified by several earlier messages.
     pub fn send_general(&mut self, k: usize, m: M,

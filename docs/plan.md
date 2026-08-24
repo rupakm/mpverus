@@ -1555,6 +1555,15 @@ as a parameter, so both bodies become receive-free and the single interference
 point moves to the driver. `Acceptor` is a `Process` today, which removes the
 bespoke loop but keeps the restriction; `Process::wf` says `np() == 1` out loud.
 
+**`caused_by2` stays.** The simplification review established that Paxos does
+not strictly need it -- the `Accepted -> Accept` edge follows from
+`rec_accepted_logged` and `rec_laccept_backed` -- and removing it took about
+ninety lines out of the framework and eight stubs out of the other protocols.
+It was reinstated deliberately: demanding both causes at the send is a stronger
+and more local statement than deriving one afterwards, and a protocol whose
+second edge is NOT derivable would otherwise have to reach for `send_general`
+and carry a set for a fixed pair.
+
 **A macro for the constant part of a `NetInv` impl.** Six of the eight protocols
 have all eleven required lemmas empty and the same nine spec bodies -- about
 thirty lines a protocol author copies before writing any protocol. Trait

@@ -137,6 +137,15 @@ pub open spec fn is_p2b(c: ChanId) -> bool { c == p2b(c.ix[0], c.ix[1]) }
 pub open spec fn is_p2a(c: ChanId) -> bool { c == p2a(c.ix[0], c.ix[1]) }
 pub open spec fn is_pdec(c: ChanId) -> bool { c == pdec(c.ix[0]) }
 
+/// Every `Accepted` ever sent answers an `Accept` the proposer really sent.
+pub open spec fn rec_accepted_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_p2b(c)
+            ==> exists|j: nat| ws.contains(
+                    (p2a(c.ix[0], c.ix[1]), j,
+                     PMsg::Accept(m->Accepted_0, m->Accepted_1)))
+}
+
 /// Every `Accept` ever sent is backed by the proposer's own commitment.
 pub open spec fn rec_accept_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
     forall|c: ChanId, i: nat, m: PMsg|
@@ -375,12 +384,16 @@ impl NetInv<PMsg> for Paxos {
     open spec fn caused_by(c: ChanId, m: PMsg, causes: Set<(ChanId, nat, PMsg)>) -> bool {
         &&& (is_p2a(c) ==> exists|j: nat| causes.contains(
                 (pdec(c.ix[0]), j, PMsg::Decided(m->Accept_0, m->Accept_1))))
-        // An acceptance points at the acceptor's own log entry. It does not
-        // also have to point at the `Accept` it answers: the log entry already
-        // does, by `rec_laccept_backed`, so the second edge is derivable.
-        &&& (is_p2b(c) ==> exists|j: nat| causes.contains(
-                (alog(c.ix[1]), j,
-                 PMsg::LAccept(m->Accepted_0, m->Accepted_1))))
+        &&& (is_p2b(c) ==> {
+                // An acceptance answers an Accept AND is recorded in the
+                // acceptor's own log.
+                &&& exists|j: nat| causes.contains(
+                        (p2a(c.ix[0], c.ix[1]), j,
+                         PMsg::Accept(m->Accepted_0, m->Accepted_1)))
+                &&& exists|j: nat| causes.contains(
+                        (alog(c.ix[1]), j,
+                         PMsg::LAccept(m->Accepted_0, m->Accepted_1)))
+            })
         // A commitment must present a quorum of promises. `causes` has the same
         // type as the record, so the obligation is literally the same predicate.
         &&& (is_pdec(c) && m is Decided
@@ -405,8 +418,7 @@ impl NetInv<PMsg> for Paxos {
                                         m->Promise_2, m->Promise_3))
         &&& (is_alog(c) && m is LAccept ==> d == p2a(m->LAccept_0.prop as int, c.ix[0])
                 && m2 == PMsg::Accept(m->LAccept_0, m->LAccept_1))
-        &&& (is_p2b(c) ==> d == alog(c.ix[1])
-                && m2 == PMsg::LAccept(m->Accepted_0, m->Accepted_1))
+        &&& !is_p2b(c)
         &&& !(is_pdec(c) && m is Decided)
     }
 
@@ -425,14 +437,28 @@ impl NetInv<PMsg> for Paxos {
             assert(cs.contains((p2a(m->LAccept_0.prop as int, c.ix[0]), j,
                 PMsg::Accept(m->LAccept_0, m->LAccept_1))));
         }
-        if is_p2b(c) {
-            assert(cs.contains((alog(c.ix[1]), j,
-                PMsg::LAccept(m->Accepted_0, m->Accepted_1))));
-        }
     }
 
     /// An acceptance answers the Accept that arrived AND is recorded in the
     /// acceptor's own log. Exactly two causes.
+    open spec fn caused_by2(c: ChanId, m: PMsg, d1: ChanId, j1: nat, m1: PMsg,
+                            d2: ChanId, j2: nat, m2: PMsg) -> bool {
+        &&& is_p2b(c)
+        &&& d1 == p2a(c.ix[0], c.ix[1])
+        &&& m1 == PMsg::Accept(m->Accepted_0, m->Accepted_1)
+        &&& d2 == alog(c.ix[1])
+        &&& m2 == PMsg::LAccept(m->Accepted_0, m->Accepted_1)
+    }
+
+    proof fn lemma_caused_by2(c: ChanId, m: PMsg, d1: ChanId, j1: nat, m1: PMsg,
+                              d2: ChanId, j2: nat, m2: PMsg) {
+        let cs = set![(d1, j1, m1), (d2, j2, m2)];
+        assert(cs.contains((p2a(c.ix[0], c.ix[1]), j1,
+            PMsg::Accept(m->Accepted_0, m->Accepted_1))));
+        assert(cs.contains((alog(c.ix[1]), j2,
+            PMsg::LAccept(m->Accepted_0, m->Accepted_1))));
+    }
+
     open spec fn cause_gives(c: ChanId, m: PMsg) -> bool { true }
 
     /// No cross-position obligation on a single history. The acceptors'
@@ -458,6 +484,7 @@ impl NetInv<PMsg> for Paxos {
     /// same fact needs a map insertion and sequence indices at every step, and
     /// did not go through; here preservation concerns one element.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, PMsg)>) -> bool {
+        &&& rec_accepted_backed(was_sent)
         &&& rec_accept_backed(was_sent)
         &&& rec_decided_unique(was_sent)
         &&& rec_alog_ok(was_sent)
@@ -478,6 +505,27 @@ impl NetInv<PMsg> for Paxos {
                                      causes: Set<(ChanId, nat, PMsg)>) {
         let e = (c, s.len(), m);
         let post = was_sent.insert(e);
+
+        // ---- every Accepted answers an Accept ----
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_p2b(k)
+            implies exists|j2: nat| post.contains(
+                (p2a(k.ix[0], k.ix[1]), j2, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))) by {
+            if (k, x, mm) == e {
+                assert(mm is Accepted);
+                assert(c.fam == 4) by { assert(k == p2b(k.ix[0], k.ix[1])); }
+                assert(Self::needs_cause(c, m));
+                let j0 = choose|j2: nat| causes.contains(
+                    (p2a(c.ix[0], c.ix[1]), j2, PMsg::Accept(m->Accepted_0, m->Accepted_1)));
+                assert(post.contains(
+                    (p2a(k.ix[0], k.ix[1]), j0, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
+            } else {
+                let jj = choose|j2: nat| was_sent.contains(
+                    (p2a(k.ix[0], k.ix[1]), j2, PMsg::Accept(mm->Accepted_0, mm->Accepted_1)));
+                assert(post.contains(
+                    (p2a(k.ix[0], k.ix[1]), jj, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
+            }
+        }
 
         // ---- every Accept is backed by the proposer's commitment ----
         assert forall|k: ChanId, x: nat, mm: PMsg|
@@ -1320,8 +1368,8 @@ impl Acceptor {
                     proof {
                         assert(self.accepteds.id(k as int) == p2b(k as int, self.id as int));
                     }
-                    self.accepteds.send_caused(k, PMsg::Accepted(b, v),
-                                               Tracked(&w_log));
+                    self.accepteds.send_caused2(k, PMsg::Accepted(b, v),
+                                                Tracked(&w_acc), Tracked(&w_log));
 
                     self.max_bal = b;
                     self.has_acc = true;
@@ -1337,6 +1385,10 @@ impl Acceptor {
                     } by {
                         if x < h0.len() {
                             assert(self.log.hist()[x] == h0[x]);
+                            if h0[x] is LPromise {
+                            }
+                            if h0[x] is LAccept {
+                            }
                         }
                     }
                     assert(self.log.hist()[h0.len() as int] == PMsg::LAccept(b, v));

@@ -27,3 +27,24 @@ publish = false
 [[bin]]
 name = "mpverus"
 path = "src/main.rs"
+
+[dependencies]
+vstd = { path = "tools/verus-arm64-macos/vstd" }
+verus_builtin = { path = "tools/verus-arm64-macos/builtin" }
+verus_builtin_macros = { path = "tools/verus-arm64-macos/builtin_macros" }
+verus_state_machines_macros = { path = "tools/verus-arm64-macos/state_machines_macros" }
+
+[workspace]
+members = ["tools/verus-arm64-macos/builtin", "tools/verus-arm64-macos/builtin_macros", "tools/verus-arm64-macos/state_machines_macros", "tools/verus-arm64-macos/vstd"]
+
+[workspace.lints]
+
+[workspace.dependencies]
+convert_case = "0.6"
+proc-macro2 = "1"
+quote = "1"
+synstructure = "0.13"
+syn = { version = "2", features = ["full", "visit", "visit-mut", "extra-traits"] }
+verus_syn = "=0.0.0-2026-08-02-0125"
+verus_prettyplease = "=0.0.0-2026-08-09-0044"
+indexmap = "2"

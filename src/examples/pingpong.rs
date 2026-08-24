@@ -71,6 +71,10 @@ impl NetInv<Msg> for PingPong {
     open spec fn caused_by(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) -> bool { false }
     open spec fn caused_by1(c: ChanId, m: Msg, d: ChanId, j: nat, m2: Msg) -> bool { false }
     proof fn lemma_caused_by1(c: ChanId, m: Msg, d: ChanId, j: nat, m2: Msg) { }
+    open spec fn caused_by2(c: ChanId, m: Msg, d1: ChanId, j1: nat, m1: Msg,
+                            d2: ChanId, j2: nat, m2: Msg) -> bool { false }
+    proof fn lemma_caused_by2(c: ChanId, m: Msg, d1: ChanId, j1: nat, m1: Msg,
+                              d2: ChanId, j2: nat, m2: Msg) { }
 
     open spec fn cause_gives(c: ChanId, m: Msg) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) { }
