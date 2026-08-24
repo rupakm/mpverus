@@ -79,7 +79,8 @@ impl NetInv<Pkt> for Lossy {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Pkt)>,
-                                     c: ChanId, i: nat, m: Pkt,
+                                     sent: Map<ChanId, Seq<Pkt>>,
+                                     c: ChanId, s: Seq<Pkt>, m: Pkt,
                                      causes: Set<(ChanId, nat, Pkt)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }

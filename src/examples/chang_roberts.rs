@@ -160,7 +160,8 @@ impl NetInv<Elect> for CrTok {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Elect)>,
-                                     c: ChanId, i: nat, m: Elect,
+                                     sent: Map<ChanId, Seq<Elect>>,
+                                     c: ChanId, s: Seq<Elect>, m: Elect,
                                      causes: Set<(ChanId, nat, Elect)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }

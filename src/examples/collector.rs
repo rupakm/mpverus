@@ -90,7 +90,8 @@ impl NetInv<Item> for CollTok {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Item)>,
-                                     c: ChanId, i: nat, m: Item,
+                                     sent: Map<ChanId, Seq<Item>>,
+                                     c: ChanId, s: Seq<Item>, m: Item,
                                      causes: Set<(ChanId, nat, Item)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }

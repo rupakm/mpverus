@@ -106,7 +106,8 @@ impl NetInv<FMsg> for TpcfTok {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, FMsg)>,
-                                     c: ChanId, i: nat, m: FMsg,
+                                     sent: Map<ChanId, Seq<FMsg>>,
+                                     c: ChanId, s: Seq<FMsg>, m: FMsg,
                                      causes: Set<(ChanId, nat, FMsg)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }

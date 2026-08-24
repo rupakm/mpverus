@@ -109,7 +109,8 @@ impl NetInv<Msg> for Tpc {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Msg)>,
-                                     c: ChanId, i: nat, m: Msg,
+                                     sent: Map<ChanId, Seq<Msg>>,
+                                     c: ChanId, s: Seq<Msg>, m: Msg,
                                      causes: Set<(ChanId, nat, Msg)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }

@@ -173,6 +173,36 @@ pub open spec fn log_ok(p: int, h: Seq<PMsg>) -> bool {
 /// "This channel is some acceptor's Accepted channel." Says it by equality
 /// rather than by picking apart the name, so `wit_inv` can be instantiated.
 pub open spec fn is_p2b(c: ChanId) -> bool { c == p2b(c.ix[0], c.ix[1]) }
+pub open spec fn is_p2a(c: ChanId) -> bool { c == p2a(c.ix[0], c.ix[1]) }
+pub open spec fn is_pdec(c: ChanId) -> bool { c == pdec(c.ix[0]) }
+
+/// Every `Accepted` ever sent answers an `Accept` the proposer really sent.
+pub open spec fn rec_accepted_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_p2b(c)
+            ==> exists|j: nat| ws.contains(
+                    (p2a(c.ix[0], c.ix[1]), j,
+                     PMsg::Accept(m->Accepted_0, m->Accepted_1)))
+}
+
+/// Every `Accept` ever sent is backed by the proposer's own commitment.
+pub open spec fn rec_accept_backed(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m: PMsg|
+        (#[trigger] ws.contains((c, i, m))) && is_p2a(c)
+            ==> exists|j: nat| ws.contains(
+                    (pdec(c.ix[0]), j, PMsg::Decided(m->Accept_0, m->Accept_1)))
+}
+
+/// A proposer commits at most one value per ballot. The log's strictly
+/// increasing ballots are what make this true, so it is a fact about ONE
+/// channel read back through the record.
+pub open spec fn rec_decided_unique(ws: Set<(ChanId, nat, PMsg)>) -> bool {
+    forall|c: ChanId, i: nat, m1: PMsg, j: nat, m2: PMsg|
+        (#[trigger] ws.contains((c, i, m1))) && (#[trigger] ws.contains((c, j, m2)))
+        && is_pdec(c) && m1 is Decided && m2 is Decided
+        && m1->Decided_0 == m2->Decided_0
+            ==> m1 == m2
+}
 
 pub struct Paxos;
 
@@ -299,39 +329,81 @@ impl NetInv<PMsg> for Paxos {
     /// same fact needs a map insertion and sequence indices at every step, and
     /// did not go through; here preservation concerns one element.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, PMsg)>) -> bool {
-        forall|c: ChanId, i: nat, m: PMsg|
-            (#[trigger] was_sent.contains((c, i, m))) && is_p2b(c)
-                ==> exists|j: nat| was_sent.contains(
-                        (p2a(c.ix[0], c.ix[1]), j,
-                         PMsg::Accept(m->Accepted_0, m->Accepted_1)))
+        &&& rec_accepted_backed(was_sent)
+        &&& rec_accept_backed(was_sent)
+        &&& rec_decided_unique(was_sent)
     }
 
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, PMsg)>,
-                                     c: ChanId, i: nat, m: PMsg,
+                                     sent: Map<ChanId, Seq<PMsg>>,
+                                     c: ChanId, s: Seq<PMsg>, m: PMsg,
                                      causes: Set<(ChanId, nat, PMsg)>) {
-        let post = was_sent.insert((c, i, m));
+        let e = (c, s.len(), m);
+        let post = was_sent.insert(e);
+
+        // ---- every Accepted answers an Accept ----
         assert forall|k: ChanId, x: nat, mm: PMsg|
             (#[trigger] post.contains((k, x, mm))) && is_p2b(k)
-            implies exists|j: nat| post.contains(
-                (p2a(k.ix[0], k.ix[1]), j, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))) by {
-            if (k, x, mm) == (c, i, m) {
-                // The new one. `wit_inv` says this channel carries only
-                // `Accepted`, so the send needed a cause, and `caused_by`
-                // named the witness the sender presented.
+            implies exists|j2: nat| post.contains(
+                (p2a(k.ix[0], k.ix[1]), j2, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))) by {
+            if (k, x, mm) == e {
                 assert(mm is Accepted);
                 assert(c.fam == 4) by { assert(k == p2b(k.ix[0], k.ix[1])); }
                 assert(Self::needs_cause(c, m));
-                let j0 = choose|j: nat| causes.contains(
-                    (p2a(c.ix[0], c.ix[1]), j, PMsg::Accept(m->Accepted_0, m->Accepted_1)));
+                let j0 = choose|j2: nat| causes.contains(
+                    (p2a(c.ix[0], c.ix[1]), j2, PMsg::Accept(m->Accepted_0, m->Accepted_1)));
                 assert(post.contains(
                     (p2a(k.ix[0], k.ix[1]), j0, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
             } else {
-                let jj = choose|j: nat| was_sent.contains(
-                    (p2a(k.ix[0], k.ix[1]), j, PMsg::Accept(mm->Accepted_0, mm->Accepted_1)));
+                let jj = choose|j2: nat| was_sent.contains(
+                    (p2a(k.ix[0], k.ix[1]), j2, PMsg::Accept(mm->Accepted_0, mm->Accepted_1)));
                 assert(post.contains(
                     (p2a(k.ix[0], k.ix[1]), jj, PMsg::Accept(mm->Accepted_0, mm->Accepted_1))));
+            }
+        }
+
+        // ---- every Accept is backed by the proposer's commitment ----
+        assert forall|k: ChanId, x: nat, mm: PMsg|
+            (#[trigger] post.contains((k, x, mm))) && is_p2a(k)
+            implies exists|j2: nat| post.contains(
+                (pdec(k.ix[0]), j2, PMsg::Decided(mm->Accept_0, mm->Accept_1))) by {
+            if (k, x, mm) == e {
+                assert(mm is Accept);
+                assert(c.fam == 3) by { assert(k == p2a(k.ix[0], k.ix[1])); }
+                assert(Self::needs_cause(c, m));
+                let j0 = choose|j2: nat| causes.contains(
+                    (pdec(c.ix[0]), j2, PMsg::Decided(m->Accept_0, m->Accept_1)));
+                assert(post.contains(
+                    (pdec(k.ix[0]), j0, PMsg::Decided(mm->Accept_0, mm->Accept_1))));
+            } else {
+                let jj = choose|j2: nat| was_sent.contains(
+                    (pdec(k.ix[0]), j2, PMsg::Decided(mm->Accept_0, mm->Accept_1)));
+                assert(post.contains(
+                    (pdec(k.ix[0]), jj, PMsg::Decided(mm->Accept_0, mm->Accept_1))));
+            }
+        }
+
+        // ---- one value per ballot, per proposer ----
+        //
+        // The new entry cannot collide with an old one, because the gate on a
+        // decision log demands a ballot strictly greater than everything there
+        // -- and the agreement invariant is what turns "everything in the
+        // record on this channel" into "everything in this history".
+        assert forall|k: ChanId, x: nat, mm1: PMsg, y: nat, mm2: PMsg|
+            (#[trigger] post.contains((k, x, mm1))) && (#[trigger] post.contains((k, y, mm2)))
+            && is_pdec(k) && mm1 is Decided && mm2 is Decided
+            && mm1->Decided_0 == mm2->Decided_0
+            implies mm1 == mm2 by {
+            if (k, x, mm1) == e && (k, y, mm2) != e {
+                assert(k == c && sent[c] == s);
+                assert(y < s.len() && s[y as int] == mm2);
+                assert(blt(mm2->Decided_0, m->Decided_0));
+            } else if (k, y, mm2) == e && (k, x, mm1) != e {
+                assert(k == c && sent[c] == s);
+                assert(x < s.len() && s[x as int] == mm1);
+                assert(blt(mm1->Decided_0, m->Decided_0));
             }
         }
     }
@@ -461,31 +533,136 @@ pub proof fn lemma_accept_after_promise(
 }
 
 // ---------------------------------------------------------------------------
-// NEXT: agreement.
+// Safety
+// ---------------------------------------------------------------------------
+
+/// The channel names really are what `is_p2b` and friends say they are.
+pub proof fn lemma_chan_shapes(p: int, a: int)
+    ensures
+        is_p2b(p2b(p, a)), is_p2a(p2a(p, a)), is_pdec(pdec(p)),
+        p2b(p, a).ix[0] == p, p2b(p, a).ix[1] == a,
+        p2a(p, a).ix[0] == p, p2a(p, a).ix[1] == a,
+        pdec(p).ix[0] == p,
+{
+    assert(seq![p, a, 0][0] == p);
+    assert(seq![p, a, 0][1] == a);
+    assert(seq![p][0] == p);
+}
+
+/// Acceptor `a` accepted `(b, v)`: it said so on the channel back to `b`'s
+/// proposer.
+pub open spec fn accepted(ws: Set<(ChanId, nat, PMsg)>, a: int, b: Ballot, v: u64) -> bool {
+    exists|i: nat| ws.contains((p2b(b.prop as int, a), i, PMsg::Accepted(b, v)))
+}
+
+/// `v` is chosen at ballot `b`: a quorum of acceptors accepted it.
+pub open spec fn chosen(ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v: u64) -> bool {
+    exists|q: Set<int>| is_quorum(q)
+        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v)
+}
+
+/// A quorum is not empty.
+pub proof fn lemma_quorum_nonempty(q: Set<int>)
+    requires is_quorum(q),
+    ensures  exists|a: int| q.contains(a),
+{
+    lemma_acceptors();
+    if !(exists|a: int| q.contains(a)) {
+        assert(q =~= Set::<int>::empty());
+    }
+}
+
+/// ONE VALUE PER BALLOT.
+///
+/// Whatever two acceptors accepted at the same ballot, it was the same value.
+/// The chain is three cross-participant hops, each one a witness the sender was
+/// required to present: an `Accepted` answers an `Accept`, an `Accept` is backed
+/// by the proposer's own commitment, and a proposer commits once per ballot
+/// because its log's ballots strictly increase.
+///
+/// No quorum reasoning is needed here at all.
+pub proof fn lemma_one_value_per_ballot(
+    ws: Set<(ChanId, nat, PMsg)>,
+    a1: int, a2: int, b: Ballot, v1: u64, v2: u64,
+)
+    requires
+        Paxos::record_inv(ws),
+        accepted(ws, a1, b, v1),
+        accepted(ws, a2, b, v2),
+    ensures
+        v1 == v2,
+{
+    let p = b.prop as int;
+    lemma_chan_shapes(p, a1);
+    lemma_chan_shapes(p, a2);
+
+    let i1 = choose|i: nat| ws.contains((p2b(p, a1), i, PMsg::Accepted(b, v1)));
+    let i2 = choose|i: nat| ws.contains((p2b(p, a2), i, PMsg::Accepted(b, v2)));
+
+    // Accepted -> Accept
+    let j1 = choose|j: nat| ws.contains((p2a(p, a1), j, PMsg::Accept(b, v1)));
+    let j2 = choose|j: nat| ws.contains((p2a(p, a2), j, PMsg::Accept(b, v2)));
+
+    // Accept -> Decided, both on the SAME log, because the ballot names its
+    // proposer.
+    let k1 = choose|k: nat| ws.contains((pdec(p), k, PMsg::Decided(b, v1)));
+    let k2 = choose|k: nat| ws.contains((pdec(p), k, PMsg::Decided(b, v2)));
+
+    // One commitment per ballot.
+    assert(PMsg::Decided(b, v1) == PMsg::Decided(b, v2));
+}
+
+/// AGREEMENT AT A BALLOT: two values chosen at the same ballot are equal.
+pub proof fn lemma_agreement_same_ballot(
+    ws: Set<(ChanId, nat, PMsg)>, b: Ballot, v1: u64, v2: u64,
+)
+    requires
+        Paxos::record_inv(ws),
+        chosen(ws, b, v1),
+        chosen(ws, b, v2),
+    ensures
+        v1 == v2,
+{
+    let q1 = choose|q: Set<int>| is_quorum(q)
+        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v1);
+    let q2 = choose|q: Set<int>| is_quorum(q)
+        && forall|a: int| q.contains(a) ==> accepted(ws, a, b, v2);
+    lemma_quorum_nonempty(q1);
+    lemma_quorum_nonempty(q2);
+    let a1 = choose|a: int| q1.contains(a);
+    let a2 = choose|a: int| q2.contains(a);
+    lemma_one_value_per_ballot(ws, a1, a2, b, v1, v2);
+}
+
+// ---------------------------------------------------------------------------
+// WHAT IS AND IS NOT PROVED
 //
-// What is proved above is the acceptor's local protocol and the fact a proposer
-// needs from it. What is NOT yet proved is agreement itself: that two values
-// chosen at different ballots are equal.
+// PROVED: agreement at a ballot. Two values chosen at the same ballot are
+// equal, and more strongly, whatever any two acceptors accepted at one ballot
+// was the same value. That runs a chain of three cross-participant hops --
+// Accepted answers Accept, Accept is backed by the proposer's commitment, a
+// proposer commits once per ballot -- each licensed by a witness the sender was
+// required to present. It needs no quorum reasoning at all.
 //
-// The route is clear and the framework now admits it. Agreement is a statement
-// about messages on many acceptors' channels, so it belongs in `history_inv`, and
-// preserving it at a send needs the witnesses the sender presented -- which
-// `lemma_history_inv_preserved` now receives, and did not before this protocol was
-// attempted. A first cross-participant clause was written and is left out here
-// because its proof did not converge, not because the framework refuses it; the
-// obstacle was quantifier plumbing around an existential nested under a
-// `forall`, which is proof engineering rather than expressiveness.
+// PROVED, and waiting to be used: the acceptor's local protocol, its export as
+// a pure pairwise fact (`lemma_promise_reports_high`), and quorum intersection
+// (`lemma_quorum_intersect`). Those are the two halves of the phase-one
+// argument.
 //
-// The remaining pieces, in order:
+// NOT PROVED: agreement ACROSS ballots -- that a value chosen at `b` is the
+// only value any later ballot can choose. This is the half of Paxos that phase
+// one exists for, and it needs two things this file does not yet have.
 //
-//   1. `Accepted` implies the matching `Accept` -- one `history_inv` clause, using
-//      the causes now available.
-//   2. `Accept(b, v)` implies `Decided(b, v)` on the proposer's log, and the
-//      log makes the value a function of the ballot.
-//   3. The phase-one argument: a proposer that gathers a quorum of promises
-//      for `b` and takes the highest report cannot contradict a value chosen at
-//      any `b' < b`. `lemma_quorum_intersect` and
-//      `lemma_promise_reports_high` are the two halves, and both are proved.
-//   4. Agreement follows.
+//   1. `Decided(b, v)` must be justified by a QUORUM of promises for `b`, with
+//      `v` the value of the highest report among them. The framework admits
+//      this -- `caused_by` takes a set of causes precisely so that a quorum can
+//      justify a message -- but the gate and the causes are not written.
+//
+//   2. An induction over ballots. The proposer's value came from the highest
+//      reported ballot `bm < b`, and concluding it agrees with a value chosen
+//      at `b' <= bm` is the induction hypothesis at `bm`. Verus can carry this
+//      with `decreases b.round, b.prop`, but it has not been attempted.
+//
+// Neither is a limitation of the framework; both are proof work.
 
 } // verus!

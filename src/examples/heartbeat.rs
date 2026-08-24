@@ -73,7 +73,8 @@ impl NetInv<Beat> for HbTok {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Beat)>,
-                                     c: ChanId, i: nat, m: Beat,
+                                     sent: Map<ChanId, Seq<Beat>>,
+                                     c: ChanId, s: Seq<Beat>, m: Beat,
                                      causes: Set<(ChanId, nat, Beat)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) {

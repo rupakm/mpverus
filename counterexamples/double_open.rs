@@ -36,7 +36,8 @@ impl NetInv<u64> for Triv {
     open spec fn record_inv(was_sent: Set<(ChanId, nat, u64)>) -> bool { true }
     proof fn lemma_record_inv_init() { }
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, u64)>,
-                                     c: ChanId, i: nat, m: u64,
+                                     sent: Map<ChanId, Seq<u64>>,
+                                     c: ChanId, s: Seq<u64>, m: u64,
                                      causes: Set<(ChanId, nat, u64)>) { }
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
     proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<u64>>, c: ChanId) { }

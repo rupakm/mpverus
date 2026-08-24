@@ -292,16 +292,26 @@ pub trait NetInv<M> : Sized {
     /// provable at all.
     proof fn lemma_record_inv_preserved(
         was_sent: Set<(ChanId, nat, M)>,
-        c: ChanId, i: nat, m: M,
+        sent: Map<ChanId, Seq<M>>,
+        c: ChanId, s: Seq<M>, m: M,
         causes: Set<(ChanId, nat, M)>,
     )
         requires
             Self::record_inv(was_sent),
-            Self::wit_inv(c, m),
+            // The gate and the history it read, so a property of the record
+            // may still be established from what the gate checked. Without
+            // this, "no earlier message on this channel had property P" is
+            // unavailable, and that is a thing gates routinely enforce.
+            Self::gate(c, s, m),
+            sent.dom().contains(c), sent[c] == s,
+            // A witness names a real position of a real history, which is what
+            // ties the two domains together.
+            forall|k: ChanId, i2: nat, mm: M| (#[trigger] was_sent.contains((k, i2, mm)))
+                ==> sent.dom().contains(k) && i2 < sent[k].len() && sent[k][i2 as int] == mm,
             causes.subset_of(was_sent),
             Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
-            Self::record_inv(was_sent.insert((c, i, m)));
+            Self::record_inv(was_sent.insert((c, s.len(), m)));
 
     /// ... and is preserved by a send the gate admits.
     ///
@@ -568,7 +578,7 @@ tokenized_state_machine!{
         ) {
             Inv::lemma_gate_gives_inv(c, s, m);
             Inv::lemma_history_inv_preserved(pre.sent, pre.was_sent, c, s, m, causes);
-            Inv::lemma_record_inv_preserved(pre.was_sent, c, s.len(), m, causes);
+            Inv::lemma_record_inv_preserved(pre.was_sent, pre.sent, c, s, m, causes);
             assert(post.was_sent =~= pre.was_sent.insert((c, s.len(), m)));
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
             assert forall|k: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((k, i, mm))
