@@ -1888,7 +1888,9 @@ impl Proposer {
             cs.instance_id() == old(self).log.iid(),
             quorum_backs(cs.set(), old(self).id as int, old(self).bal, v),
             old(self).bal.round < u64::MAX,
-        ensures  final(self).inv(), final(self).na() == old(self).na(),
+        ensures
+            final(self).inv(), final(self).na() == old(self).na(),
+            final(self).bal.round == old(self).bal.round + 1,
     {
         proof {
             assert(self.log.id().ix[0] == self.id as int) by {
