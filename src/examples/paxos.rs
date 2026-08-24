@@ -1488,10 +1488,11 @@ impl Proposer {
             match m { PMsg::Promise(bb, _, _, _) => *bb == b, _ => false }
         };
         let ghost pspec = |k: int, m: PMsg| m is Promise && m->Promise_0 == b;
-        let (srcs, msgs, Tracked(cs)) =
+        let (srcs, msgs, Tracked(cs), Ghost(poss)) =
             self.promises.collect(need, Ghost(pspec), accept);
 
-        // Restate what came back in the protocol's own names.
+        // Restate what came back in the protocol's own names. `collect` names
+        // the position of every witness it kept, so nothing has to be chosen.
         proof {
             assert forall|i: int| 0 <= i < need as int implies
                 (#[trigger] msgs@[i]) is Promise && msgs@[i]->Promise_0 == b by {
@@ -1502,12 +1503,11 @@ impl Proposer {
                                     msgs@[i]->Promise_1, msgs@[i]->Promise_2,
                                     msgs@[i]->Promise_3) by {
                 assert(pspec(srcs@[i] as int, msgs@[i]));
-                let n = choose|n: nat| cs.set().contains(
-                    (self.promises.id(srcs@[i] as int), n, msgs@[i]));
+                assert(self.promises.id(srcs@[i] as int) == p1b(pid, srcs@[i] as int));
                 assert(msgs@[i] == PMsg::Promise(b, msgs@[i]->Promise_1,
                                                  msgs@[i]->Promise_2, msgs@[i]->Promise_3));
                 assert(cs.set().contains(
-                    (p1b(pid, srcs@[i] as int), n,
+                    (p1b(pid, srcs@[i] as int), poss[i],
                      PMsg::Promise(b, msgs@[i]->Promise_1, msgs@[i]->Promise_2,
                                    msgs@[i]->Promise_3))));
             }
@@ -1515,7 +1515,8 @@ impl Proposer {
                 exists|i: int| 0 <= i < need as int
                     && e.0 == p1b(pid, #[trigger] srcs@[i] as int) && e.2 == msgs@[i] by {
                 let i = choose|i: int| 0 <= i < need as int
-                    && e.0 == self.promises.id(srcs@[i] as int) && e.2 == msgs@[i];
+                    && e == (self.promises.id(srcs@[i] as int), poss[i], msgs@[i]);
+                assert(self.promises.id(srcs@[i] as int) == p1b(pid, srcs@[i] as int));
             }
             lemma_collected_promised(cs.set(), pid, b, srcs@, msgs@, need as int);
         }
@@ -1524,7 +1525,6 @@ impl Proposer {
         let mut has_best = false;
         let mut best_bal = Ballot { round: 0, prop: 0 };
         let mut best_val: u64 = 0;
-        let ghost mut q: Set<int> = Set::empty();
         let mut i: usize = 0;
         while i < need
             invariant
@@ -1534,17 +1534,12 @@ impl Proposer {
                     ==> #[trigger] srcs@[j] != #[trigger] srcs@[l],
                 forall|j: int| 0 <= j < need
                     ==> (#[trigger] msgs@[j]) is Promise && msgs@[j]->Promise_0 == b,
-                q.len() == i,
-                forall|j: int| 0 <= j < i ==> q.contains(#[trigger] srcs@[j] as int),
-                forall|a: int| q.contains(a)
-                    ==> exists|j: int| 0 <= j < i && #[trigger] srcs@[j] as int == a,
                 has_best ==> exists|j: int| 0 <= j < i
                     && #[trigger] msgs@[j] == PMsg::Promise(b, true, best_bal, best_val),
                 forall|j: int| 0 <= j < i && (#[trigger] msgs@[j])->Promise_1
                     ==> has_best && ble(msgs@[j]->Promise_2, best_bal),
             decreases need - i,
         {
-            let ghost q0 = q;
             let ghost hb0 = has_best;
             let ghost bb0 = best_bal;
             let ghost bv0 = best_val;
@@ -1558,29 +1553,23 @@ impl Proposer {
                 }
                 _ => { proof { assert(false); } }
             }
-            proof {
-                q = q.insert(srcs@[i as int] as int);
-                assert(!q0.contains(srcs@[i as int] as int));
-                assert forall|j: int| 0 <= j < i + 1
-                    && (#[trigger] msgs@[j])->Promise_1
-                    implies has_best && ble(msgs@[j]->Promise_2, best_bal) by {
-                    
-                }
-                assert forall|a: int| q.contains(a) implies
-                    exists|j: int| 0 <= j < i + 1 && #[trigger] srcs@[j] as int == a by {
-                    if a != srcs@[i as int] as int {
-                        let j = choose|j: int| 0 <= j < i as int && srcs@[j] as int == a;
-                        assert(0 <= j < i + 1 && srcs@[j] as int == a);
-                    } else {
-                        assert((i as int) < i + 1 && srcs@[i as int] as int == a);
-                    }
-                }
-            }
             i = i + 1;
         }
 
         let v = if has_best { best_val } else { self.want };
+
+        // The quorum is just the set of sources. `collect` already proved they
+        // are distinct, which is the whole content of "this is a majority".
+        let ghost sseq = Seq::new(need as nat, |j: int| srcs@[j] as int);
+        let ghost q = sseq.to_set();
         proof {
+            sseq.to_set_ensures();
+            assert(sseq.no_duplicates());
+            sseq.unique_seq_to_set();
+            assert forall|a: int| q.contains(a) implies
+                exists|j: int| 0 <= j < need as int && #[trigger] srcs@[j] as int == a by {
+                let j = choose|j: int| 0 <= j < sseq.len() && sseq[j] == a;
+            }
             assert(is_quorum(q)) by {
                 assert forall|a: int| q.contains(a) implies acceptors().contains(a) by {
                     let j = choose|j: int| 0 <= j < need as int && srcs@[j] as int == a;
@@ -1602,6 +1591,7 @@ impl Proposer {
                     assert(promised(cs.set(), pid, srcs@[j] as int, b,
                                     msgs@[j]->Promise_1, msgs@[j]->Promise_2,
                                     msgs@[j]->Promise_3));
+                    assert(q.contains(sseq[j]));
                     assert(q.contains(srcs@[j] as int)
                         && promised(cs.set(), pid, srcs@[j] as int, b, true,
                                     best_bal, best_val));

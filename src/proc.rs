@@ -720,7 +720,8 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
         need: usize,
         p: Ghost<spec_fn(int, M) -> bool>,
         accept: F,
-    ) -> (res: (Vec<usize>, Vec<M>, Tracked<SetToken<(ChanId, nat, M), NetSM::was_sent<M, Inv>>>))
+    ) -> (res: (Vec<usize>, Vec<M>, Tracked<SetToken<(ChanId, nat, M), NetSM::was_sent<M, Inv>>>,
+                Ghost<Seq<nat>>))
         requires
             old(self).wf(),
             need <= old(self).rxs.len(),
@@ -739,23 +740,26 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
             forall|i: int, j: int|
                 0 <= i < need && 0 <= j < need && i != j
                     ==> #[trigger] res.0@[i] != #[trigger] res.0@[j],
-            // Everything counted passed the filter, and has a witness.
+            // Everything counted passed the filter, and its witness is named:
+            // `res.3` is the position each one occupies in its channel, so a
+            // caller reads the record entry off rather than choosing it.
+            res.3@.len() == need,
             forall|i: int| 0 <= i < need
                 ==> #[trigger] p@(res.0@[i] as int, res.1@[i])
                     && Inv::wit_inv(final(self).id(res.0@[i] as int), res.1@[i])
-                    && exists|n: nat|
-                        res.2@.set().contains(
-                            (final(self).id(res.0@[i] as int), n, res.1@[i])),
+                    && res.2@.set().contains(
+                        (final(self).id(res.0@[i] as int), res.3@[i], res.1@[i])),
             // ... and the set holds nothing else.
             forall|e: (ChanId, nat, M)| res.2@.set().contains(e)
                 ==> exists|i: int| 0 <= i < need
                         && e.0 == final(self).id(#[trigger] res.0@[i] as int)
-                        && e.2 == res.1@[i],
+                        && e.1 == res.3@[i] && e.2 == res.1@[i],
     {
         let mut srcs: Vec<usize> = Vec::new();
         let mut msgs: Vec<M> = Vec::new();
         let tracked mut cs = SetToken::empty(self.inst@.id());
         let ghost ids0 = self.ids@;
+        let ghost mut poss: Seq<nat> = Seq::empty();
 
         // One flag per peer, so a chatty peer cannot fill the quorum alone.
         let n = self.rxs.len();
@@ -769,6 +773,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
                 need <= ids0.len(),
                 seen.len() == ids0.len(),
                 srcs.len() == msgs.len(),
+                poss.len() == srcs.len(),
                 srcs.len() <= need,
                 cs.instance_id() == old(self).iid(),
                 forall|k: usize, m: &M| #[trigger] call_requires(accept, (k, m)),
@@ -782,12 +787,11 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
                 forall|i: int| 0 <= i < srcs.len()
                     ==> #[trigger] p@(srcs@[i] as int, msgs@[i])
                         && Inv::wit_inv(ids0[srcs@[i] as int], msgs@[i])
-                        && exists|n: nat|
-                            cs.set().contains((ids0[srcs@[i] as int], n, msgs@[i])),
+                        && cs.set().contains(
+                            (ids0[srcs@[i] as int], poss[i], msgs@[i])),
                 forall|e: (ChanId, nat, M)| cs.set().contains(e)
                     ==> exists|i: int| 0 <= i < srcs.len()
-                            && e.0 == ids0[#[trigger] srcs@[i] as int]
-                            && e.2 == msgs@[i],
+                            && e == (ids0[#[trigger] srcs@[i] as int], poss[i], msgs@[i]),
         {
             let (k, m, Tracked(w)) = self.recv_any_wit();
             if !seen[k] && accept(k, &m) {
@@ -795,45 +799,42 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
                 let ghost s0 = cs.set();
                 let ghost srcs0 = srcs@;
                 let ghost msgs0 = msgs@;
+                let ghost poss0 = poss;
                 proof { cs.insert(w); }
                 seen.set(k, true);
                 srcs.push(k);
                 msgs.push(m);
                 proof {
+                    poss = poss.push(e.1);
                     assert(cs.set() =~= s0.insert(e));
                     assert(srcs@ =~= srcs0.push(k));
                     assert(msgs@ =~= msgs0.push(m));
-                    // The new entry, and every old one, still has its witness.
-                    assert(exists|n: nat|
-                        cs.set().contains((ids0[k as int], n, m))) by {
-                        assert(cs.set().contains((ids0[k as int], e.1, m)));
-                    }
+                    assert(poss =~= poss0.push(e.1));
+                    assert(e == (ids0[k as int], e.1, m));
                     assert forall|i: int| 0 <= i < srcs0.len() implies
                         #[trigger] p@(srcs@[i] as int, msgs@[i])
                         && Inv::wit_inv(ids0[srcs@[i] as int], msgs@[i])
-                        && exists|n: nat|
-                            cs.set().contains((ids0[srcs@[i] as int], n, msgs@[i])) by {
+                        && cs.set().contains((ids0[srcs@[i] as int], poss[i], msgs@[i])) by {
                         assert(srcs@[i] == srcs0[i]);
                         assert(msgs@[i] == msgs0[i]);
+                        assert(poss[i] == poss0[i]);
                         assert(p@(srcs0[i] as int, msgs0[i]));
-                        let n0 = choose|n: nat|
-                            s0.contains((ids0[srcs0[i] as int], n, msgs0[i]));
-                        assert(cs.set().contains((ids0[srcs0[i] as int], n0, msgs0[i])));
                     }
                     // Nothing else got in: the set grew by exactly one element,
                     // and that element is the one just pushed.
                     assert forall|x: (ChanId, nat, M)| cs.set().contains(x) implies
                         exists|i: int| 0 <= i < srcs@.len()
-                            && x.0 == ids0[#[trigger] srcs@[i] as int]
-                            && x.2 == msgs@[i] by {
+                            && x == (ids0[#[trigger] srcs@[i] as int], poss[i], msgs@[i]) by {
                         if x == e {
                             assert(srcs@[srcs0.len() as int] == k);
                             assert(msgs@[srcs0.len() as int] == m);
+                            assert(poss[srcs0.len() as int] == e.1);
                         } else {
                             let i0 = choose|i: int| 0 <= i < srcs0.len()
-                                && x.0 == ids0[srcs0[i] as int] && x.2 == msgs0[i];
+                                && x == (ids0[srcs0[i] as int], poss0[i], msgs0[i]);
                             assert(srcs@[i0] == srcs0[i0]);
                             assert(msgs@[i0] == msgs0[i0]);
+                            assert(poss[i0] == poss0[i0]);
                         }
                     }
                     // Distinctness: `k` was unmarked, every earlier source is marked.
@@ -852,12 +853,23 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
             assert forall|i: int| 0 <= i < need implies
                 #[trigger] p@(srcs@[i] as int, msgs@[i])
                 && Inv::wit_inv(self.id(srcs@[i] as int), msgs@[i])
-                && exists|n: nat| cs.set().contains((self.id(srcs@[i] as int), n, msgs@[i])) by {
+                && cs.set().contains((self.id(srcs@[i] as int), poss[i], msgs@[i])) by {
                 assert(p@(srcs@[i] as int, msgs@[i]));
                 assert(self.id(srcs@[i] as int) == ids0[srcs@[i] as int]);
             }
+            assert forall|x: (ChanId, nat, M)| cs.set().contains(x) implies
+                exists|i: int| 0 <= i < need
+                    && x.0 == self.id(#[trigger] srcs@[i] as int)
+                    && x.1 == poss[i] && x.2 == msgs@[i] by {
+                let i0 = choose|i: int| 0 <= i < srcs@.len()
+                    && x == (ids0[srcs@[i] as int], poss[i], msgs@[i]);
+                assert(self.id(srcs@[i0] as int) == ids0[srcs@[i0] as int]);
+                assert(0 <= i0 < need
+                    && x.0 == self.id(srcs@[i0] as int)
+                    && x.1 == poss[i0] && x.2 == msgs@[i0]);
+            }
         }
-        (srcs, msgs, Tracked(cs))
+        (srcs, msgs, Tracked(cs), Ghost(poss))
     }
 
     /// Block until any peer sends, and report which. The interference point.
