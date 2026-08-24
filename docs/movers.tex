@@ -627,6 +627,134 @@ ownership discipline is the right one}, not as machinery that is running. The
 discipline is what is doing the work, and it can be stated on its own: a service
 may rely on a fact across an interference point exactly when that fact is about
 state it exclusively owns, or about state that only grows.
+Section~\ref{sec:rests} states it properly, says what the proofs do rest on, and
+gives the side condition that keeps it true as the model grows.
+
+% ===========================================================================
+\section{What the proofs actually rest on}\label{sec:rests}
+
+The previous section is the historical route into this design, and it is how the
+technique is usually described. It is not what carries the proofs. This section
+says what does, because the difference matters for anyone extending the system.
+
+\subsection*{The foundation is ownership, not reduction}
+
+The guarantee that makes per-thread sequential reasoning valid under
+interleaving comes from the \emph{tokenized state machine} meta-theory --- in
+substance a concurrent separation logic. If a thread can change state only by
+performing a declared transition with tokens it holds, and every
+\code{\#[invariant]} is inductive over those transitions, then the invariants
+hold in every reachable state of every interleaving. That is the theorem doing
+the work, and it is why there are no non-interference obligations anywhere in
+this development.
+
+Lipton's theorem is orthogonal to it. It would license treating a \emph{block}
+as one step, and nothing proved here needs a block to be one step. The places
+one might expect a hidden dependence do not have one: \code{recv\_abs}'s
+postcondition follows from the machine's agreement invariant rather than from
+atomicity; the two-phase commit's loop invariant is about an immutable
+uninterpreted function; the storage node performs a receive and two sends while
+holding every relevant token, so no intermediate state is observable by anyone.
+
+So the mover vocabulary in Section~\ref{sec:movers} should be read as an
+explanation of \emph{why the ownership discipline is the right one}, not as
+machinery that is running.
+
+\subsection*{The principle, in one sentence}
+
+\begin{prooframe}{STABILITY}
+\textbf{A thread's assertions mention only state it owns exclusively, or state
+that only grows.} Both are stable under any interleaving, which is why
+sequential reasoning per thread needs no interference checks. \reify{Structural:
+a service's \code{wf} is a specification function over its own fields, and those
+fields are owned tokens and local values.}
+\end{prooframe}
+
+Two things make this more than an aspiration.
+
+It is \textbf{enforced by construction rather than checked}. A service's
+invariant is a specification function over its own fields, so it cannot name
+state the service does not own. An unstable invariant is not something one has
+to remember to avoid; it is not expressible.
+
+And the \textbf{escape hatch is deliberately narrow}. When a thread does need a
+fact about state it does not own --- Section~\ref{sec:provenance} is the case
+--- the only route is a \code{property!} that projects the fact to a
+\emph{pure predicate over values the reader can name}. A pure fact cannot later
+become false, so it is stable for a third reason. The \code{birds\_eye} binding
+going out of scope is what prevents keeping anything else, and it is why
+\code{cause\_gives} and \code{extra\_gives2} have the shape they do.
+
+\subsection*{The side condition on every future field}
+
+The principle is not automatic. It holds because of the sharding strategy chosen
+for each field of the machine, and every current field falls in one of four
+stable kinds:
+
+\begin{center}\small
+\begin{tabular}{@{}p{0.30\linewidth}p{0.62\linewidth}@{}}
+\toprule
+\code{map} & one exclusive token per key \\
+\code{variable} & one exclusive token \\
+\code{persistent\_set} & monotone; tokens duplicable, never retracted \\
+\code{constant} & fixed at initialisation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{prooframe}{FIELD DISCIPLINE}
+\textbf{Every field of the machine must be exclusively owned or monotone.}
+Adding a field with shared or fractional ownership --- one another thread can
+change underneath a holder --- makes a service's assertions unstable, and
+per-thread sequential reasoning unsound. \reify{Nothing checks this. It is a
+design side condition, and adding a field is the moment to apply it.}
+\end{prooframe}
+
+This is the condition to check when protocol state moves into the machine, which
+is the main planned extension. As designed, it holds: participant state is
+\code{map}-sharded and keyed by participant, so each owns its own, and exported
+facts are \code{persistent\_set}. What would break it is a counter others can
+decrement, or a shared \code{variable}.
+
+\subsection*{Where reduction would still be wanted}
+
+Not for soundness. For \emph{abstraction}: stating that a particular function
+body performs one step of a declared abstract action, which is the open gap of
+Section~\ref{sec:assumed}. ``One action'' is an atomicity claim, and coarsening
+granularity between layers is what reduction buys.
+
+There is an alternative worth naming, because this development is in a
+separation-logic shape wearing Civl's vocabulary, and the separation-logic
+technique may fit better. Instead of arguing a block is atomic, designate one
+operation as the \emph{linearization point} at which the abstract state changes,
+and show the surrounding operations are stutters. That needs no reduction
+theorem, and showing an operation does not touch the abstract state is precisely
+what an ownership discipline is good at. Which of the two to build is an open
+design question rather than a settled one.
+
+\subsection*{Four ideas that carry more weight than their length suggests}
+
+\textbf{Monotone witnesses are the bridge.} \code{was\_sent} is the only way a
+thread learns about state it does not own. Provenance
+(Section~\ref{sec:provenance}) and the pairwise guarantee of
+Section~\ref{sec:machine} are two uses of one idea, not two mechanisms.
+
+\textbf{A gate is not a blocking condition.} A send whose gate fails is a bug; an
+operation with no available step merely waits. Keeping them apart is what makes
+refinement stateable, and it is why the delivery discipline is a separate
+concept from the gate rather than part of it.
+
+\textbf{Structural beats proved.} A single sender per channel, a single consumer,
+a channel opened at most once, a handle that cannot be relabelled --- each is
+enforced by Rust's type system rather than by the solver. That costs no
+assumption, no invariant and no solver time, and it cannot be defeated by a weak
+specification. One of those was a real hole, closed this way.
+
+\textbf{Purity is the export mechanism.} Anything learned about unowned state
+must be projected to a pure predicate or it is lost when the binding goes out of
+scope. This is the constraint behind \code{cause\_gives} and
+\code{extra\_gives2}, and it is the one rule in this development most easily
+discovered the hard way.
 
 % ===========================================================================
 \section{A first protocol}\label{sec:pingpong}
@@ -1811,10 +1939,24 @@ identity: \code{HbTop::step} is \emph{the count grows, or nothing changed}.
 % ===========================================================================
 \section{What is assumed}\label{sec:assumed}
 
-Verus checks that the obligations above are discharged. It does not, and cannot,
-check the reduction theory that makes those obligations sufficient: there is no
-formal execution semantics inside the Rust program to state Lipton's theorem
-against. So the boundary has to be drawn explicitly.
+Verus checks that the obligations above are discharged. What it does not check
+is the meta-theory that makes discharging them sufficient. So the boundary has
+to be drawn explicitly --- and drawn in the right place, which is not where an
+earlier version of this write-up drew it.
+
+The load-bearing assumption is the \textbf{tokenized state machine
+meta-theory}: that a thread which changes state only by performing declared
+transitions with tokens it holds, over invariants proved inductive, cannot
+violate those invariants under any interleaving. That is what licenses
+per-thread sequential reasoning here, and it is assumed rather than proved in
+this development because it belongs to the framework rather than to the
+protocols. It is also, unlike reduction, an assumption every proof below
+genuinely rests on.
+
+Lipton's theorem is also listed, and it is honest to record that
+\emph{nothing currently rests on it} --- see Section~\ref{sec:rests}. It is kept
+on the list because the abstraction step this development still lacks would need
+it, or would need the linearization-point argument that could replace it.
 
 \begin{center}
 \small
@@ -1842,13 +1984,21 @@ against. So the boundary has to be drawn explicitly.
 & Diverges, so any postcondition holds. Used when a spawned thread panics and
   its tokens are therefore gone. \\
 \addlinespace
+Tokenized state machine
+meta-theory
+& That ownership of tokens plus inductive invariants gives per-thread
+  sequential reasoning under any interleaving. The assumption every proof here
+  rests on (Section~\ref{sec:rests}). Not an \code{external\_body} declaration
+  --- it is a property of the framework, not of this development. \\
+\addlinespace
 Per-protocol configuration
 & Four small facts, one per protocol: how many participants, nodes or producers
   there are, and (for the ring) that node identifiers are distinct. \\
 \addlinespace
 Lipton's theorem
 & That pairwise commutativity licenses treating a block as atomic. Its side
-  conditions are discharged (Section~\ref{sec:movers}); the theorem is not. \\
+  conditions are discharged (Section~\ref{sec:movers}); the theorem is not.
+  Listed for completeness: no proof here appeals to it. \\
 \bottomrule
 \end{tabular}
 \end{center}
