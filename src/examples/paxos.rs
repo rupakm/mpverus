@@ -1426,8 +1426,7 @@ impl Proposer {
         &&& self.prepares.wf() && self.promises.wf() && self.accepts.wf()
         &&& self.log.wf() && self.log.id() == pdec(self.id as int)
         &&& self.promises.len() == self.na() && self.accepts.len() == self.na()
-        &&& forall|a: int| 0 <= a < self.na()
-                ==> (#[trigger] self.promises.rxs@[a].id()) == p1b(self.id as int, a)
+        &&& self.promises.ids@ =~= Seq::new(self.na(), |a: int| p1b(self.id as int, a))
         &&& self.na() == n_acc() && self.na() > 0
         &&& self.prepares.ids@ =~= Seq::new(self.na(), |a: int| p1a(self.id as int, a))
         &&& self.accepts.ids@  =~= Seq::new(self.na(), |a: int| p2a(self.id as int, a))
@@ -1503,7 +1502,6 @@ impl Proposer {
                                     msgs@[i]->Promise_1, msgs@[i]->Promise_2,
                                     msgs@[i]->Promise_3) by {
                 assert(pspec(srcs@[i] as int, msgs@[i]));
-                assert(self.promises.rxs@[srcs@[i] as int].id() == p1b(pid, srcs@[i] as int));
                 let n = choose|n: nat| cs.set().contains(
                     (self.promises.id(srcs@[i] as int), n, msgs@[i]));
                 assert(msgs@[i] == PMsg::Promise(b, msgs@[i]->Promise_1,
@@ -1518,7 +1516,6 @@ impl Proposer {
                     && e.0 == p1b(pid, #[trigger] srcs@[i] as int) && e.2 == msgs@[i] by {
                 let i = choose|i: int| 0 <= i < need as int
                     && e.0 == self.promises.id(srcs@[i] as int) && e.2 == msgs@[i];
-                assert(self.promises.rxs@[srcs@[i] as int].id() == p1b(pid, srcs@[i] as int));
             }
             lemma_collected_promised(cs.set(), pid, b, srcs@, msgs@, need as int);
         }

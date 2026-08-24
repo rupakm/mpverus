@@ -396,11 +396,8 @@ impl LockServer {
         &&& self.rsps.len() > 0
         // The reply channels, as one equality between values.
         &&& self.rsps.ids@ =~= Seq::new(self.rsps.len(), |j: int| acq_rsp(j))
-        // The request side is still a quantifier, because `Inbox` does not
-        // carry its channel names the way `FanOut` does. It survives only
-        // because it is stated over `rxs@`, which `recv_any` preserves.
-        &&& forall|k: int| 0 <= k < self.inbox.rxs@.len()
-                ==> (#[trigger] self.inbox.rxs@[k].id()) == acq_req(k)
+        // And the request channels the same way.
+        &&& self.inbox.ids@ =~= Seq::new(self.inbox.len(), |k: int| acq_req(k))
     }
 
     /// This service, seen as the implementation transition system above.

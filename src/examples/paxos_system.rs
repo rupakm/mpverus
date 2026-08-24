@@ -181,23 +181,15 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
     let mut accs: Vec<Out<PMsg, Paxos>> = Vec::new();
     accs.push(q2a0_out); accs.push(q2a1_out); accs.push(q2a2_out);
 
-    let tracked mut ptoks = MapToken::empty(inst.id());
-    let mut prxs: Vec<Receiver<PMsg>> = Vec::new();
-    let q1b0_rx = q1b0_in.rx;
-    let q1b1_rx = q1b1_in.rx;
-    let q1b2_rx = q1b2_in.rx;
-    proof {
-        ptoks.insert(q1b0_in.tok.get());
-        ptoks.insert(q1b1_in.tok.get());
-        ptoks.insert(q1b2_in.tok.get());
-    }
-    prxs.push(q1b0_rx); prxs.push(q1b1_rx); prxs.push(q1b2_rx);
-
     let tracked ip = inst.clone();
+    let mut promises = Inbox::<PMsg, Paxos>::empty(Tracked(ip));
+    promises.add(q1b0_in);
+    promises.add(q1b1_in);
+    promises.add(q1b2_in);
     let mut prop = Proposer {
         id: 0,
         prepares: FanOut { outs: preps, ids: Ghost(Seq::new(3nat, |a: int| p1a(0, a))) },
-        promises: Inbox { rxs: prxs, toks: Tracked(ptoks), inst: Tracked(ip) },
+        promises,
         accepts:  FanOut { outs: accs,  ids: Ghost(Seq::new(3nat, |a: int| p2a(0, a))) },
         log: dec_out,
         // Above the acceptors' initial ballot, so phase one is not refused.

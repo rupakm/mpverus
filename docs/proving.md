@@ -169,8 +169,10 @@ Four rules, all learned by hitting them:
 - **The channel map is one value, not a quantified relation.** `spec fn
   chans(&self) -> Seq<ChanId>`, not `spec fn chan(&self, k: int)`. A `forall`
   recorded before a call is about a receiver that afterwards has no name; a
-  single equality chains. Same rule as the vectors below — capture both sides
-  as ghost DATA and the relation between two immutable values survives.
+  single equality chains. This is why `Inbox`, `FanOut` and `FanIn` all carry
+  `ids: Ghost<Seq<ChanId>>`: the names are immutable ghost data, so `Driven`'s
+  invariant is `inbox.ids@ == h.chans()` and nothing has to be re-established
+  after a receive.
 - **`handle` must bound `from`.** Without `0 <= from < chans().len()` the
   channel lookup is unspecified and the guarantee attached to it says nothing.
 - **A handler cannot branch on which channel a message came from.** The fact is

@@ -157,10 +157,7 @@ impl Consumer {
     pub open spec fn inv(&self) -> bool {
         &&& self.hub.wf()
         &&& self.hub.len() == n_producers()
-        // Stated over the receiver vector, so it survives a call that changes
-        // only the consumption records.
-        &&& forall|j: int| 0 <= j < n_producers()
-                ==> (#[trigger] self.hub.rxs@[j].id()) == hub_from(j)
+        &&& self.hub.ids@ =~= Seq::new(n_producers() as nat, |j: int| hub_from(j))
     }
 
     pub fn collect_one(&mut self) -> (item: Item)
@@ -171,8 +168,7 @@ impl Consumer {
         // Interference point: producers are emitting while we are blocked.
         let (which, item) = self.hub.recv_any();
         proof {
-            let c = self.hub.rxs@[which as int].id();
-            assert(c == hub_from(which as int));
+            let c = self.hub.id(which as int);
             assert(is_hub(c)) by {
                 assert(0 <= (which as int) < n_producers()
                        && c == hub_from(which as int));

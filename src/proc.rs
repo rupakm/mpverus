@@ -522,22 +522,71 @@ impl<M, Inv: NetInv<M>> FanIn<M, Inv> {
 ///
 /// The consumption records live in one `MapToken` rather than one token per
 /// channel, because that is what the underlying primitive consumes.
+/// Like `FanOut` and `FanIn`, the mailbox carries its channel names as
+/// IMMUTABLE ghost data. That is what lets a service state which peer is on
+/// which slot as a single equality between values rather than as a quantifier
+/// over `rxs`, which every receive would otherwise invalidate.
 pub struct Inbox<#[verifier::reject_recursive_types] M, Inv: NetInv<M>> {
     pub rxs:  Vec<Receiver<M>>,
+    pub ids:  Ghost<Seq<ChanId>>,
     pub toks: Tracked<MapToken<ChanId, Seq<M>, NetSM::recvd<M, Inv>>>,
     pub inst: Tracked<NetSM::Instance<M, Inv>>,
 }
 
 impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
-    pub open spec fn id(&self, k: int) -> ChanId { self.rxs[k].id() }
+    pub open spec fn id(&self, k: int) -> ChanId { self.ids@[k] }
     pub open spec fn len(&self) -> nat { self.rxs.len() as nat }
     pub open spec fn iid(&self) -> InstanceId { self.inst@.id() }
 
-    pub open spec fn wf(&self) -> bool {
-        &&& self.rxs.len() > 0
+    /// Everything except being non-empty, so a mailbox can be built up slot by
+    /// slot and only has to be complete before it is used.
+    pub open spec fn pre_wf(&self) -> bool {
+        &&& self.ids@.len() == self.rxs.len()
         &&& self.toks@.instance_id() == self.inst@.id()
-        &&& forall|k: int| 0 <= k < self.rxs.len()
-                ==> self.toks@.dom().contains(#[trigger] self.rxs[k].id())
+        &&& forall|k: int| 0 <= k < self.rxs.len() ==> {
+                &&& (#[trigger] self.rxs[k]).id() == self.ids@[k]
+                &&& self.toks@.dom().contains(self.rxs[k].id())
+            }
+    }
+
+    pub open spec fn wf(&self) -> bool { self.rxs.len() > 0 && self.pre_wf() }
+
+    /// An empty mailbox.
+    pub fn empty(Tracked(inst): Tracked<NetSM::Instance<M, Inv>>) -> (b: Self)
+        ensures b.pre_wf(), b.iid() == inst.id(), b.len() == 0, b.ids@ == Seq::<ChanId>::empty(),
+    {
+        let tracked toks = MapToken::empty(inst.id());
+        Inbox {
+            rxs: Vec::new(), ids: Ghost(Seq::empty()),
+            toks: Tracked(toks), inst: Tracked(inst),
+        }
+    }
+
+    /// Add one inbound endpoint, in slot order.
+    ///
+    /// The endpoint is taken apart HERE, once, so no deployment has to reach
+    /// into `rx` and `tok` itself -- which is the one place a caller could pair
+    /// a receiver with a different channel's consumption record.
+    pub fn add(&mut self, e: In<M, Inv>)
+        requires old(self).pre_wf(), e.wf(), e.iid() == old(self).iid(),
+        ensures
+            final(self).pre_wf(),
+            final(self).iid() == old(self).iid(),
+            final(self).len() == old(self).len() + 1,
+            final(self).ids@ =~= old(self).ids@.push(e.id()),
+    {
+        let ghost c = e.id();
+        let ghost n0 = self.rxs@.len();
+        let rx = e.rx;
+        proof { self.toks.borrow_mut().insert(e.tok.get()); }
+        self.rxs.push(rx);
+        proof { self.ids = Ghost(self.ids@.push(c)); }
+        assert forall|k: int| 0 <= k < self.rxs.len() implies {
+            &&& (#[trigger] self.rxs[k]).id() == self.ids@[k]
+            &&& self.toks@.dom().contains(self.rxs[k].id())
+        } by {
+            if k < n0 { assert(self.rxs@[k] == old(self).rxs@[k]); }
+        }
     }
 
     /// Block until any peer sends, keeping the witness. Needed when the message
@@ -548,6 +597,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
             final(self).wf(),
             final(self).iid() == old(self).iid(),
             final(self).rxs@ == old(self).rxs@,
+            final(self).ids@ == old(self).ids@,
             0 <= res.0 < final(self).rxs.len(),
             res.2@.instance_id() == final(self).iid(),
             res.2@.element().0 == final(self).id(res.0 as int),
@@ -614,7 +664,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
         ensures
             final(self).wf(),
             final(self).iid() == old(self).iid(),
-            final(self).rxs@ == old(self).rxs@,
+            final(self).ids@ == old(self).ids@,
             res.0.len() == need,
             res.1.len() == need,
             res.2@.instance_id() == final(self).iid(),
@@ -639,7 +689,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
         let mut srcs: Vec<usize> = Vec::new();
         let mut msgs: Vec<M> = Vec::new();
         let tracked mut cs = SetToken::empty(self.inst@.id());
-        let ghost rxs0 = self.rxs@;
+        let ghost ids0 = self.ids@;
 
         // One flag per peer, so a chatty peer cannot fill the quorum alone.
         let n = self.rxs.len();
@@ -648,29 +698,29 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
         while srcs.len() < need
             invariant
                 self.wf(),
-                self.rxs@ == rxs0,
+                self.ids@ == ids0,
                 self.inst@.id() == old(self).iid(),
-                need <= rxs0.len(),
-                seen.len() == rxs0.len(),
+                need <= ids0.len(),
+                seen.len() == ids0.len(),
                 srcs.len() == msgs.len(),
                 srcs.len() <= need,
                 cs.instance_id() == old(self).iid(),
                 forall|k: usize, m: &M| #[trigger] call_requires(accept, (k, m)),
                 forall|k: usize, m: &M, r: bool|
                     #[trigger] call_ensures(accept, (k, m), r) ==> r == p@(k as int, *m),
-                forall|i: int| 0 <= i < srcs.len() ==> #[trigger] srcs@[i] < rxs0.len(),
+                forall|i: int| 0 <= i < srcs.len() ==> #[trigger] srcs@[i] < ids0.len(),
                 forall|i: int| 0 <= i < srcs.len() ==> seen@[#[trigger] srcs@[i] as int],
                 forall|i: int, j: int|
                     0 <= i < srcs.len() && 0 <= j < srcs.len() && i != j
                         ==> #[trigger] srcs@[i] != #[trigger] srcs@[j],
                 forall|i: int| 0 <= i < srcs.len()
                     ==> #[trigger] p@(srcs@[i] as int, msgs@[i])
-                        && Inv::wit_inv(rxs0[srcs@[i] as int].id(), msgs@[i])
+                        && Inv::wit_inv(ids0[srcs@[i] as int], msgs@[i])
                         && exists|n: nat|
-                            cs.set().contains((rxs0[srcs@[i] as int].id(), n, msgs@[i])),
+                            cs.set().contains((ids0[srcs@[i] as int], n, msgs@[i])),
                 forall|e: (ChanId, nat, M)| cs.set().contains(e)
                     ==> exists|i: int| 0 <= i < srcs.len()
-                            && e.0 == rxs0[#[trigger] srcs@[i] as int].id()
+                            && e.0 == ids0[#[trigger] srcs@[i] as int]
                             && e.2 == msgs@[i],
         {
             let (k, m, Tracked(w)) = self.recv_any_wit();
@@ -689,33 +739,33 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
                     assert(msgs@ =~= msgs0.push(m));
                     // The new entry, and every old one, still has its witness.
                     assert(exists|n: nat|
-                        cs.set().contains((rxs0[k as int].id(), n, m))) by {
-                        assert(cs.set().contains((rxs0[k as int].id(), e.1, m)));
+                        cs.set().contains((ids0[k as int], n, m))) by {
+                        assert(cs.set().contains((ids0[k as int], e.1, m)));
                     }
                     assert forall|i: int| 0 <= i < srcs0.len() implies
                         #[trigger] p@(srcs@[i] as int, msgs@[i])
-                        && Inv::wit_inv(rxs0[srcs@[i] as int].id(), msgs@[i])
+                        && Inv::wit_inv(ids0[srcs@[i] as int], msgs@[i])
                         && exists|n: nat|
-                            cs.set().contains((rxs0[srcs@[i] as int].id(), n, msgs@[i])) by {
+                            cs.set().contains((ids0[srcs@[i] as int], n, msgs@[i])) by {
                         assert(srcs@[i] == srcs0[i]);
                         assert(msgs@[i] == msgs0[i]);
                         assert(p@(srcs0[i] as int, msgs0[i]));
                         let n0 = choose|n: nat|
-                            s0.contains((rxs0[srcs0[i] as int].id(), n, msgs0[i]));
-                        assert(cs.set().contains((rxs0[srcs0[i] as int].id(), n0, msgs0[i])));
+                            s0.contains((ids0[srcs0[i] as int], n, msgs0[i]));
+                        assert(cs.set().contains((ids0[srcs0[i] as int], n0, msgs0[i])));
                     }
                     // Nothing else got in: the set grew by exactly one element,
                     // and that element is the one just pushed.
                     assert forall|x: (ChanId, nat, M)| cs.set().contains(x) implies
                         exists|i: int| 0 <= i < srcs@.len()
-                            && x.0 == rxs0[#[trigger] srcs@[i] as int].id()
+                            && x.0 == ids0[#[trigger] srcs@[i] as int]
                             && x.2 == msgs@[i] by {
                         if x == e {
                             assert(srcs@[srcs0.len() as int] == k);
                             assert(msgs@[srcs0.len() as int] == m);
                         } else {
                             let i0 = choose|i: int| 0 <= i < srcs0.len()
-                                && x.0 == rxs0[srcs0[i] as int].id() && x.2 == msgs0[i];
+                                && x.0 == ids0[srcs0[i] as int] && x.2 == msgs0[i];
                             assert(srcs@[i0] == srcs0[i0]);
                             assert(msgs@[i0] == msgs0[i0]);
                         }
@@ -738,9 +788,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
                 && Inv::wit_inv(self.id(srcs@[i] as int), msgs@[i])
                 && exists|n: nat| cs.set().contains((self.id(srcs@[i] as int), n, msgs@[i])) by {
                 assert(p@(srcs@[i] as int, msgs@[i]));
-                assert(self.rxs@[srcs@[i] as int] == rxs0[srcs@[i] as int]);
-                let n0 = choose|n: nat| cs.set().contains((rxs0[srcs@[i] as int].id(), n, msgs@[i]));
-                assert(cs.set().contains((self.id(srcs@[i] as int), n0, msgs@[i])));
+                assert(self.id(srcs@[i] as int) == ids0[srcs@[i] as int]);
             }
         }
         (srcs, msgs, Tracked(cs))
@@ -753,6 +801,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
             final(self).wf(),
             final(self).iid() == old(self).iid(),
             final(self).rxs@ == old(self).rxs@,
+            final(self).ids@ == old(self).ids@,
             0 <= res.0 < final(self).rxs.len(),
             Inv::wit_inv(final(self).id(res.0 as int), res.1),
     {
@@ -938,9 +987,7 @@ impl<M, Inv: NetInv<M>, H: NetHandler<M, Inv>> Driven<M, Inv, H> {
         &&& self.h.wf()
         &&& self.inbox.wf()
         &&& self.inbox.iid() == self.h.iid()
-        &&& self.h.chans().len() == self.inbox.rxs@.len()
-        &&& forall|k: int| 0 <= k < self.inbox.rxs@.len()
-                ==> (#[trigger] self.inbox.rxs@[k].id()) == self.h.chans()[k]
+        &&& self.inbox.ids@ == self.h.chans()
     }
 }
 
@@ -951,20 +998,8 @@ impl<M, Inv: NetInv<M>, H: NetHandler<M, Inv>> Process for Driven<M, Inv, H> {
     /// Repeating this is `(R . N . L*)*` -- a sequence of atomic blocks with a
     /// checked invariant between them, which is what `run` does.
     fn step(&mut self) {
-        // Capture both sides as ghost DATA before anything moves. A relation
-        // between two immutable values survives the calls; a quantified fact
-        // about `self` does not, because `self` changes twice.
-        let ghost ids0 = self.inbox.rxs@;
-        let ghost cs0  = self.h.chans();
-        assert(forall|j: int| 0 <= j < ids0.len() ==> (#[trigger] ids0[j].id()) == cs0[j]);
-
         self.h.tick();
         let (k, m, Tracked(w)) = self.inbox.recv_any_wit();
-        proof {
-            assert(self.inbox.rxs@ =~= ids0);
-            assert(self.h.chans() =~= cs0);
-            assert(ids0[k as int].id() == cs0[k as int]);
-        }
         self.h.handle(k, m, Tracked(w));
     }
 }

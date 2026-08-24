@@ -124,17 +124,14 @@ pub fn deploy_lease() -> (accepted: bool)
 
     // ---- 3. Build the three services. Each is handed exactly the ends it owns.
     let tracked i1 = inst.clone();
-    let tracked mut srv_toks = MapToken::empty(inst.id());
-    let mut srv_rxs: Vec<Receiver<Msg>> = Vec::new();
-    let acq_in_rx = acq_in.rx;
-    proof { srv_toks.insert(acq_in.tok.get()); }
-    srv_rxs.push(acq_in_rx);
+    let mut srv_inbox = Inbox::<Msg, Lease>::empty(Tracked(i1));
+    srv_inbox.add(acq_in);
 
     let mut srv_rsps: Vec<Out<Msg, Lease>> = Vec::new();
     srv_rsps.push(grt_out);
     let ghost srv_ids = Seq::new(1nat, |j: int| acq_rsp(j));
     let mut server = LockServer {
-        inbox: Inbox { rxs: srv_rxs, toks: Tracked(srv_toks), inst: Tracked(i1) },
+        inbox: srv_inbox,
         rsps: FanOut { outs: srv_rsps, ids: Ghost(srv_ids) },
         hi: 0, held: false, held_until: 0,
     };
@@ -156,16 +153,9 @@ pub fn deploy_lease() -> (accepted: bool)
     // acknowledgement channel, in the order its `chans()` declares. `Driven`'s
     // invariant is what checks that they match.
     let tracked i2 = inst.clone();
-    let tracked mut wr_toks = MapToken::empty(inst.id());
-    let mut wr_rxs: Vec<Receiver<Msg>> = Vec::new();
-    let grt_rx = grt_in.rx;
-    let ack_rx = ack_in.rx;
-    proof {
-        wr_toks.insert(grt_in.tok.get());
-        wr_toks.insert(ack_in.tok.get());
-    }
-    wr_rxs.push(grt_rx);
-    wr_rxs.push(ack_rx);
+    let mut wr_inbox = Inbox::<Msg, Lease>::empty(Tracked(i2));
+    wr_inbox.add(grt_in);
+    wr_inbox.add(ack_in);
 
     let writer = Writer {
         id: 0, acq: acq_out, wr: wr_out,
@@ -175,8 +165,11 @@ pub fn deploy_lease() -> (accepted: bool)
     };
     let mut driven = Driven {
         h: writer,
-        inbox: Inbox { rxs: wr_rxs, toks: Tracked(wr_toks), inst: Tracked(i2) },
+        inbox: wr_inbox,
     };
+    assert(driven.inv()) by {
+        assert(driven.inbox.ids@ =~= driven.h.chans());
+    }
 
     // ---- 4. Run. The counts are chosen so every service finishes: the writer
     // acquires once and then writes four times, so the server serves one
