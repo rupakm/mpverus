@@ -351,26 +351,6 @@ pub proof fn serve_one_is_abstract(pre: LockServer, post: LockServer, resp: Msg)
         LockRef::abs_state(pre.st()), LockRef::abs_state(post.st())));
 }
 
-/// Writer `k`'s acquire endpoints are the ones they should be.
-pub open spec fn srv_pair_ok(
-    rxs: Seq<Receiver<Msg>>, rsps: Seq<Out<Msg, Lease>>, k: int,
-) -> bool {
-    &&& rxs[k].id() == acq_req(k)
-    &&& rsps[k].wf() && rsps[k].id() == acq_rsp(k)
-}
-
-/// Writer `k`'s write endpoints are the ones they should be, and belong to the
-/// machine the journal belongs to.
-pub open spec fn wr_pair_ok(
-    reqs: Seq<In<Msg, Lease>>, rsps: Seq<Out<Msg, Lease>>, jiid: InstanceId, k: int,
-) -> bool {
-    &&& reqs[k].wf() && rsps[k].wf()
-    &&& reqs[k].id() == wr_req(k)
-    &&& rsps[k].id() == wr_rsp(k)
-    &&& reqs[k].iid() == jiid
-    &&& rsps[k].iid() == jiid
-}
-
 /// The lock server, as an implementation rather than an idealisation: it tracks
 /// the outstanding lease and refuses while that lease is still live.
 ///
@@ -378,7 +358,7 @@ pub open spec fn wr_pair_ok(
 /// serving the others.
 pub struct LockServer {
     pub inbox: Inbox<Msg, Lease>,
-    pub rsps:  Vec<Out<Msg, Lease>>,
+    pub rsps:  FanOut<Msg, Lease>,
     /// The highest lease issued so far; 0 before any. Never reused: when it
     /// cannot advance, the server stops issuing leases rather than repeating
     /// one. Tokens are therefore nonzero without a separate invariant.
@@ -390,11 +370,16 @@ pub struct LockServer {
 
 impl LockServer {
     pub open spec fn inv(&self) -> bool {
-        &&& self.inbox.wf()
+        &&& self.inbox.wf() && self.rsps.wf()
         &&& self.inbox.len() == self.rsps.len()
         &&& self.rsps.len() > 0
-        &&& forall|k: int| 0 <= k < self.rsps.len()
-                ==> #[trigger] srv_pair_ok(self.inbox.rxs@, self.rsps@, k)
+        // The reply channels, as one equality between values.
+        &&& self.rsps.ids@ =~= Seq::new(self.rsps.len(), |j: int| acq_rsp(j))
+        // The request side is still a quantifier, because `Inbox` does not
+        // carry its channel names the way `FanOut` does. It survives only
+        // because it is stated over `rxs@`, which `recv_any` preserves.
+        &&& forall|k: int| 0 <= k < self.inbox.rxs@.len()
+                ==> (#[trigger] self.inbox.rxs@[k].id()) == acq_req(k)
     }
 
     /// This service, seen as the implementation transition system above.
@@ -421,39 +406,35 @@ impl LockServer {
             // step of `LockLo`, and therefore -- by `server_step_lifts` -- one
             // the abstract server could have taken.
             ({
-                let h0 = old(self).rsps@[k as int].hist();
-                let h1 = final(self).rsps@[k as int].hist();
+                let h0 = old(self).rsps.hist(k as int);
+                let h1 = final(self).rsps.hist(k as int);
                 &&& h1 == h0.push(h1.last())
                 &&& exists|a: LockAct| #[trigger] LockLo::step(
                         a, Msg::Acquire, h1.last(), old(self).st(), final(self).st())
             }),
             // No other writer's reply channel moved.
             forall|j: int| 0 <= j < final(self).rsps.len() && j != k as int
-                ==> #[trigger] final(self).rsps@[j].hist() == old(self).rsps@[j].hist(),
+                ==> #[trigger] final(self).rsps.hist(j) == old(self).rsps.hist(j),
     {
-        let ghost pre_rsps = self.rsps@;
         let ghost pre_st = self.st();
 
         // The interference point: any writer may ask while we wait.
         let (k, _req) = self.inbox.recv_any();
-        assert(srv_pair_ok(self.inbox.rxs@, self.rsps@, k as int));
-        let ghost s0 = self.rsps@;
-        let ghost h0 = self.rsps@[k as int].hist();
+        let ghost h0 = self.rsps.hist(k as int);
 
         let now = clock_now();
         let expired = !self.held || now >= self.held_until;
 
         if expired && self.hi < u64::MAX {
             let t = self.hi + 1;
-            self.rsps[k].send(Msg::Granted(t));
+            self.rsps.send(k, Msg::Granted(t));
             self.hi = t;
             self.held = true;
             // Saturating, because the clock is arbitrary and this is only a
             // deadline, never a token.
             self.held_until = if now <= u64::MAX - LEASE { now + LEASE } else { u64::MAX };
             proof {
-                assert(self.rsps@[k as int].hist() == h0.push(Msg::Granted(t)));
-                let h1 = self.rsps@[k as int].hist();
+                let h1 = self.rsps.hist(k as int);
                 assert(h1.last() == Msg::Granted(t));
                 assert(h1 == h0.push(h1.last()));
                 assert(LockLo::step(LockAct::Grant, Msg::Acquire, h1.last(),
@@ -464,10 +445,9 @@ impl LockServer {
         } else {
             // Either the outstanding lease is still live, or there are no
             // tokens left. The server refuses; it does not reissue.
-            self.rsps[k].send(Msg::Denied);
+            self.rsps.send(k, Msg::Denied);
             proof {
-                assert(self.rsps@[k as int].hist() == h0.push(Msg::Denied));
-                let h1 = self.rsps@[k as int].hist();
+                let h1 = self.rsps.hist(k as int);
                 assert(h1.last() == Msg::Denied);
                 assert(h1 == h0.push(h1.last()));
                 assert(LockLo::step(LockAct::Refuse, Msg::Acquire, h1.last(),
@@ -477,12 +457,6 @@ impl LockServer {
             }
         }
 
-        // Only writer k's reply endpoint moved, and the mailbox is unchanged.
-        assert forall|j: int| 0 <= j < self.rsps.len()
-            implies #[trigger] srv_pair_ok(self.inbox.rxs@, self.rsps@, j) by {
-            assert(srv_pair_ok(self.inbox.rxs@, s0, j));
-            if j != k as int { assert(self.rsps@[j] == s0[j]); }
-        }
         k
     }
 }
@@ -500,8 +474,8 @@ impl Process for LockServer {
 /// ordering it maintains is a fact about state it holds rather than something
 /// it needs any other service to cooperate on.
 pub struct StorageNode {
-    pub reqs: Vec<In<Msg, Lease>>,
-    pub rsps: Vec<Out<Msg, Lease>>,
+    pub reqs: FanIn<Msg, Lease>,
+    pub rsps: FanOut<Msg, Lease>,
     pub jrn:  Out<Msg, Lease>,
     pub hi_token: u64,
     pub hi_seq:   u64,
@@ -515,8 +489,11 @@ impl StorageNode {
         &&& self.reqs.len() > 0
         &&& self.turn < self.reqs.len()
         &&& self.jrn.wf() && self.jrn.id() == journal()
-        &&& forall|k: int| 0 <= k < self.reqs.len()
-                ==> #[trigger] wr_pair_ok(self.reqs@, self.rsps@, self.jrn.iid(), k)
+        &&& self.reqs.wf() && self.rsps.wf()
+        &&& self.reqs.ids@ =~= Seq::new(self.reqs.len(), |j: int| wr_req(j))
+        &&& self.rsps.ids@ =~= Seq::new(self.reqs.len(), |j: int| wr_rsp(j))
+        &&& self.reqs.iid() == self.jrn.iid()
+        &&& self.rsps.iid() == self.jrn.iid()
         // The node's own invariant: WRITE SERIALIZATION, plus the high-water
         // mark being the last entry.
         &&& serialized(self.jrn.hist())
@@ -534,13 +511,8 @@ impl StorageNode {
         requires old(self).inv(), k < old(self).reqs.len(),
         ensures  final(self).inv(), final(self).reqs.len() == old(self).reqs.len(),
     {
-        assert(wr_pair_ok(self.reqs@, self.rsps@, self.jrn.iid(), k as int));
-        let ghost r0 = self.reqs@;
-        let ghost s0 = self.rsps@;
-        let ghost jiid = self.jrn.iid();
-
         // The interference point.
-        let (req, Tracked(rw)) = self.reqs[k].recv_wit();
+        let (req, Tracked(rw)) = self.reqs.recv_wit(k);
         proof {
             // The cross-channel step: the token in this request was issued by
             // the server. Nothing in the message itself says so.
@@ -584,24 +556,15 @@ impl StorageNode {
                 }
             }
             self.jrn.send(Msg::Accepted(t, q, v));
-            self.rsps[k].send(Msg::Accepted(t, q, v));
+            self.rsps.send(k, Msg::Accepted(t, q, v));
             self.hi_token = t;
             self.hi_seq = q;
             self.have_any = true;
         } else {
             // A stale lease. The writer is not told why.
-            self.rsps[k].send(Msg::Refused);
+            self.rsps.send(k, Msg::Refused);
         }
 
-        // Only writer k's endpoints moved, and the journal kept its identity.
-        assert forall|j: int| 0 <= j < self.reqs.len()
-            implies #[trigger] wr_pair_ok(self.reqs@, self.rsps@, self.jrn.iid(), j) by {
-            if j != k as int {
-                assert(self.reqs@[j] == r0[j]);
-                assert(self.rsps@[j] == s0[j]);
-                assert(wr_pair_ok(r0, s0, jiid, j));
-            }
-        }
     }
 }
 
@@ -610,7 +573,7 @@ impl Process for StorageNode {
 
     fn step(&mut self) {
         let k = self.turn;
-        self.turn = if k + 1 < self.reqs.len() { k + 1 } else { 0 };
+        self.turn = if k + 1 < self.reqs.count() { k + 1 } else { 0 };
         self.handle_write(k);
     }
 }

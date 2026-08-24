@@ -144,8 +144,12 @@ impl Process for Participant {
     }
 }
 
-/// Participant `j`'s endpoints are the ones they should be. Stated over the
-/// vectors, so that changing one of them leaves the rest alone.
+/// Participant `j`'s endpoints are the ones they should be.
+///
+/// Only a DEPLOYMENT needs this now: it is what `system.rs` accumulates while
+/// building the vectors, and what it discharges `FanOut::wf` and `FanIn::wf`
+/// from. The coordinator itself never mentions it, because the fans own the
+/// quantifier.
 pub open spec fn tpcf_pair_ok(
     reqs: Seq<Out<FMsg, TpcfTok>>, rsps: Seq<In<FMsg, TpcfTok>>, j: int,
 ) -> bool {
@@ -155,18 +159,28 @@ pub open spec fn tpcf_pair_ok(
 }
 
 /// The coordinator. Broadcast without waiting, then gather with an early exit.
+///
+/// Its endpoints are `FanOut`/`FanIn`, which own the per-slot quantifier. What
+/// remains here is a statement about `ids@` -- ghost data those types promise
+/// not to change -- so it survives every operation and this file contains no
+/// `assert forall` at all.
 pub struct Coordinator {
-    pub reqs: Vec<Out<FMsg, TpcfTok>>,
-    pub rsps: Vec<In<FMsg, TpcfTok>>,
+    pub reqs: FanOut<FMsg, TpcfTok>,
+    pub rsps: FanIn<FMsg, TpcfTok>,
     pub committed: bool,
 }
 
 impl Coordinator {
     pub open spec fn inv(&self) -> bool {
+        &&& self.reqs.wf() && self.rsps.wf()
         &&& self.reqs.len() as int == n_parts()
         &&& self.rsps.len() as int == n_parts()
-        &&& forall|j: int| 0 <= j < n_parts()
-                ==> #[trigger] tpcf_pair_ok(self.reqs@, self.rsps@, j)
+        // Stated as ONE equality between sequence values, not as a quantifier.
+        // The fans promise `ids@` never changes, so this carries through every
+        // operation; a `forall` here would have to be re-established each time,
+        // which is the friction the fans exist to remove.
+        &&& self.reqs.ids@ =~= Seq::new(n_parts() as nat, |j: int| req_chan(j))
+        &&& self.rsps.ids@ =~= Seq::new(n_parts() as nat, |j: int| rsp_chan(j))
     }
 
     /// One round of the protocol.
@@ -182,20 +196,11 @@ impl Coordinator {
         // ---- phase 1: broadcast, no waiting ----
         // Every send is a left mover, so the whole loop is one atomic block.
         let mut i: usize = 0;
-        while i < self.reqs.len()
-            invariant
-                0 <= i <= n_parts(),
-                self.inv(),
+        while i < self.reqs.count()
+            invariant 0 <= i <= n_parts(), self.inv(),
             decreases n_parts() - i,
         {
-            let ghost r0 = self.reqs@;
-            assert(tpcf_pair_ok(self.reqs@, self.rsps@, i as int));
-            self.reqs[i].send(FMsg::Prepare);
-            assert forall|j: int| 0 <= j < n_parts()
-                implies #[trigger] tpcf_pair_ok(self.reqs@, self.rsps@, j) by {
-                assert(tpcf_pair_ok(r0, self.rsps@, j));
-                if j != i as int { assert(self.reqs@[j] == r0[j]); }
-            }
+            self.reqs.send(i, FMsg::Prepare);
             i = i + 1;
         }
 
@@ -203,27 +208,16 @@ impl Coordinator {
         let mut k: usize = 0;
         let mut all_yes: bool = true;
 
-        while k < self.rsps.len() && all_yes
+        while k < self.rsps.count() && all_yes
             invariant
                 0 <= k <= n_parts(),
                 self.inv(),
                 all_yes ==> forall|j: int| 0 <= j < k ==> vote(j),
             decreases n_parts() - k,
         {
-            let ghost s0 = self.rsps@;
-            assert(tpcf_pair_ok(self.reqs@, self.rsps@, k as int));
-
             // Interference point: participants answer while we are blocked.
-            let m = self.rsps[k].recv();
-
-            proof {
-                assert(is_rsp(rsp_chan(k as int), k as int));
-                assert forall|j: int| 0 <= j < n_parts()
-                    implies #[trigger] tpcf_pair_ok(self.reqs@, self.rsps@, j) by {
-                    assert(tpcf_pair_ok(self.reqs@, s0, j));
-                    if j != k as int { assert(self.rsps@[j] == s0[j]); }
-                }
-            }
+            let m = self.rsps.recv(k);
+            proof { assert(is_rsp(rsp_chan(k as int), k as int)); }
 
             match m {
                 FMsg::Vote(b) => { if !b { all_yes = false; } }

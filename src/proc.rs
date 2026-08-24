@@ -202,6 +202,214 @@ impl<M, Inv: NetInv<M>> In<M, Inv> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Vectors of endpoints.
+//
+// A service with one peer per slot holds a vector of endpoints, and its
+// invariant is a quantifier over that vector. Written out by hand this leaks a
+// Verus fact into every such protocol: a quantified fact about `self` does not
+// survive a call that changes `self`, so each mutation needs the quantifier
+// taken apart and rebuilt, and each call into an element needs it instantiated
+// first. That is mechanical, identical every time, and scales with the number
+// of services rather than the number of ideas.
+//
+// `FanOut` and `FanIn` own the vector and the quantifier together. The
+// `assert forall` is written once, here.
+//
+// The channel names live alongside as GHOST DATA that these types promise never
+// to change. That is what makes the arrangement work: the protocol's own
+// invariant is about `ids@` -- an immutable value -- rather than about the
+// endpoints, so it survives every operation without being re-established.
+// ---------------------------------------------------------------------------
+
+/// One outbound endpoint per slot.
+pub struct FanOut<#[verifier::reject_recursive_types] M, Inv: NetInv<M>> {
+    pub outs: Vec<Out<M, Inv>>,
+    /// Which channel each slot is. Fixed when the fan is built.
+    pub ids: Ghost<Seq<ChanId>>,
+}
+
+impl<M, Inv: NetInv<M>> FanOut<M, Inv> {
+    pub open spec fn len(&self) -> nat { self.outs.len() as nat }
+    pub open spec fn id(&self, k: int) -> ChanId { self.ids@[k] }
+    pub open spec fn hist(&self, k: int) -> Seq<M> { self.outs@[k].hist() }
+    pub open spec fn iid(&self) -> InstanceId { self.outs@[0].iid() }
+
+    pub open spec fn wf(&self) -> bool {
+        &&& self.outs.len() > 0
+        &&& self.ids@.len() == self.outs.len()
+        &&& forall|k: int| 0 <= k < self.outs@.len() ==> {
+                &&& (#[trigger] self.outs@[k]).wf()
+                &&& self.outs@[k].id() == self.ids@[k]
+                &&& self.outs@[k].iid() == self.outs@[0].iid()
+            }
+    }
+
+    /// How many slots, at run time.
+    pub fn count(&self) -> (n: usize)
+        requires self.wf(),
+        ensures  n == self.len(),
+    { self.outs.len() }
+
+    /// Send on slot `k`. The quantifier is re-established inside.
+    pub fn send(&mut self, k: usize, m: M)
+        requires
+            old(self).wf(),
+            k < old(self).len(),
+            Inv::gate(old(self).id(k as int), old(self).hist(k as int), m),
+            !Inv::needs_cause(old(self).id(k as int), m),
+        ensures
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            final(self).hist(k as int) == old(self).hist(k as int).push(m),
+            forall|j: int| 0 <= j < final(self).len() && j != k as int
+                ==> #[trigger] final(self).hist(j) == old(self).hist(j),
+    {
+        let ghost o0 = self.outs@;
+        assert(self.outs@[k as int].wf());
+        self.outs[k].send(m);
+        assert forall|j: int| 0 <= j < self.outs@.len() implies {
+            &&& (#[trigger] self.outs@[j]).wf()
+            &&& self.outs@[j].id() == self.ids@[j]
+            &&& self.outs@[j].iid() == self.outs@[0].iid()
+        } by {
+            if j != k as int { assert(self.outs@[j] == o0[j]); }
+            if k as int != 0 { assert(self.outs@[0] == o0[0]); }
+        }
+        assert forall|j: int| 0 <= j < self.outs@.len() && j != k as int
+            implies #[trigger] self.outs@[j].hist() == o0[j].hist() by {
+            assert(self.outs@[j] == o0[j]);
+        }
+    }
+}
+
+/// A remote call on slot `k`. Proof-level, like `Out::call`, whose contract and
+/// limitations this inherits.
+impl<M, Inv: DetDelivery<M>> FanOut<M, Inv> {
+    pub fn call(
+        &mut self, k: usize, req: M,
+        reply: &mut In<M, Inv>,
+        Tracked(reply_cap): Tracked<NetSM::sent<M, Inv>>,
+        Ghost(expected): Ghost<M>,
+    ) -> (m: M)
+        requires
+            old(self).wf(),
+            k < old(self).len(),
+            Inv::gate(old(self).id(k as int), old(self).hist(k as int), req),
+            !Inv::needs_cause(old(self).id(k as int), req),
+            old(reply).wf(),
+            old(reply).iid() == old(self).iid(),
+            reply_cap.instance_id() == old(self).iid(),
+            reply_cap.key() == old(reply).id(),
+            Inv::gate(old(reply).id(), reply_cap.value(), expected),
+            !Inv::needs_cause(old(reply).id(), expected),
+            Inv::deliverable_at(old(reply).rhist(), reply_cap.value().len()),
+        ensures
+            m == expected,
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            final(reply).wf(),
+            final(reply).id() == old(reply).id(),
+            final(reply).iid() == old(reply).iid(),
+    {
+        let ghost o0 = self.outs@;
+        assert(self.outs@[k as int].wf());
+        let m = self.outs[k].call(req, reply, Tracked(reply_cap), Ghost(expected));
+        assert forall|j: int| 0 <= j < self.outs@.len() implies {
+            &&& (#[trigger] self.outs@[j]).wf()
+            &&& self.outs@[j].id() == self.ids@[j]
+            &&& self.outs@[j].iid() == self.outs@[0].iid()
+        } by {
+            if j != k as int { assert(self.outs@[j] == o0[j]); }
+            if k as int != 0 { assert(self.outs@[0] == o0[0]); }
+        }
+        m
+    }
+}
+
+/// One inbound endpoint per slot, for a service that blocks on a chosen peer.
+/// A service that must wait on ALL of them wants `Inbox` instead.
+pub struct FanIn<#[verifier::reject_recursive_types] M, Inv: NetInv<M>> {
+    pub ins: Vec<In<M, Inv>>,
+    pub ids: Ghost<Seq<ChanId>>,
+}
+
+impl<M, Inv: NetInv<M>> FanIn<M, Inv> {
+    pub open spec fn len(&self) -> nat { self.ins.len() as nat }
+    pub open spec fn id(&self, k: int) -> ChanId { self.ids@[k] }
+    pub open spec fn iid(&self) -> InstanceId { self.ins@[0].iid() }
+
+    pub open spec fn wf(&self) -> bool {
+        &&& self.ins.len() > 0
+        &&& self.ids@.len() == self.ins.len()
+        &&& forall|k: int| 0 <= k < self.ins@.len() ==> {
+                &&& (#[trigger] self.ins@[k]).wf()
+                &&& self.ins@[k].id() == self.ids@[k]
+                &&& self.ins@[k].iid() == self.ins@[0].iid()
+            }
+    }
+
+    pub fn count(&self) -> (n: usize)
+        requires self.wf(),
+        ensures  n == self.len(),
+    { self.ins.len() }
+
+    /// Receive on slot `k`, with the protocol's guarantee. Interference point.
+    pub fn recv(&mut self, k: usize) -> (m: M)
+        requires old(self).wf(), k < old(self).len(),
+        ensures
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            Inv::wit_inv(old(self).id(k as int), m),
+    {
+        let ghost i0 = self.ins@;
+        assert(self.ins@[k as int].wf());
+        let m = self.ins[k].recv();
+        assert forall|j: int| 0 <= j < self.ins@.len() implies {
+            &&& (#[trigger] self.ins@[j]).wf()
+            &&& self.ins@[j].id() == self.ids@[j]
+            &&& self.ins@[j].iid() == self.ins@[0].iid()
+        } by {
+            if j != k as int { assert(self.ins@[j] == i0[j]); }
+            if k as int != 0 { assert(self.ins@[0] == i0[0]); }
+        }
+        m
+    }
+
+    /// Receive on slot `k`, keeping the witness, for use as provenance.
+    pub fn recv_wit(&mut self, k: usize) -> (r: (M, Tracked<NetSM::was_sent<M, Inv>>))
+        requires old(self).wf(), k < old(self).len(),
+        ensures
+            final(self).wf(),
+            final(self).len() == old(self).len(),
+            final(self).ids@ == old(self).ids@,
+            final(self).iid() == old(self).iid(),
+            Inv::wit_inv(old(self).id(k as int), r.0),
+            r.1@.instance_id() == old(self).iid(),
+            r.1@.element().0 == old(self).id(k as int),
+            r.1@.element().2 == r.0,
+    {
+        let ghost i0 = self.ins@;
+        assert(self.ins@[k as int].wf());
+        let (m, Tracked(w)) = self.ins[k].recv_wit();
+        assert forall|j: int| 0 <= j < self.ins@.len() implies {
+            &&& (#[trigger] self.ins@[j]).wf()
+            &&& self.ins@[j].id() == self.ids@[j]
+            &&& self.ins@[j].iid() == self.ins@[0].iid()
+        } by {
+            if j != k as int { assert(self.ins@[j] == i0[j]); }
+            if k as int != 0 { assert(self.ins@[0] == i0[0]); }
+        }
+        (m, Tracked(w))
+    }
+}
+
 /// Several inbound channels a service waits on together.
 ///
 /// A service with one `In` per peer must decide which to block on, so a silent

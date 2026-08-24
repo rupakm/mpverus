@@ -244,9 +244,26 @@ pub fn deploy(votes: &Vec<bool>) -> (committed: bool)
         j = j + 1;
     }
 
-    // ---- 3. Run the coordinator on this thread, over the endpoints that were
-    // not given away. Its precondition is now discharged by construction.
-    let mut coord = Coordinator { reqs, rsps, committed: false };
+    // ---- 3. Wrap the coordinator's endpoints in fans, which own the per-slot
+    // quantifier from here on, and run it. This is the one place the quantifier
+    // is established; the coordinator never re-establishes it.
+    let ghost req_ids = Seq::new(n as nat, |j: int| req_chan(j));
+    let ghost rsp_ids = Seq::new(n as nat, |j: int| rsp_chan(j));
+    let reqs_fan = FanOut { outs: reqs, ids: Ghost(req_ids) };
+    let rsps_fan = FanIn  { ins:  rsps, ids: Ghost(rsp_ids) };
+    proof {
+        assert forall|k: int| 0 <= k < reqs_fan.outs@.len() implies {
+            &&& (#[trigger] reqs_fan.outs@[k]).wf()
+            &&& reqs_fan.outs@[k].id() == reqs_fan.ids@[k]
+            &&& reqs_fan.outs@[k].iid() == reqs_fan.outs@[0].iid()
+        } by { assert(tpcf_pair_ok(reqs_fan.outs@, rsps_fan.ins@, k)); }
+        assert forall|k: int| 0 <= k < rsps_fan.ins@.len() implies {
+            &&& (#[trigger] rsps_fan.ins@[k]).wf()
+            &&& rsps_fan.ins@[k].id() == rsps_fan.ids@[k]
+            &&& rsps_fan.ins@[k].iid() == rsps_fan.ins@[0].iid()
+        } by { assert(tpcf_pair_ok(reqs_fan.outs@, rsps_fan.ins@, k)); }
+    }
+    let mut coord = Coordinator { reqs: reqs_fan, rsps: rsps_fan, committed: false };
     let committed = coord.run_round();
 
     // ---- 4. Wait for the participants. Their services go with them; the
