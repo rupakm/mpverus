@@ -1,0 +1,59 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Pinned deliberately. Verus is under active development and its solver
+      # encoding changes; these proofs are known to go through on this version.
+      # Bumping it is a real change and belongs in its own pull request, with
+      # the verification counts in README.md updated to match.
+      VERUS_VERSION: 0.2026.08.15.7d4628a
+      # Verus is built against one Rust toolchain and refuses to run without
+      # exactly it. Tied to VERUS_VERSION above: bump them together.
+      RUST_TOOLCHAIN: 1.97.1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the Verus toolchain
+        id: cache-verus
+        uses: actions/cache@v4
+        with:
+          path: tools
+          key: verus-x86-linux-${{ env.VERUS_VERSION }}
+
+      - name: Fetch Verus
+        if: steps.cache-verus.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          asset="verus-${VERUS_VERSION}-x86-linux.zip"
+          url="https://github.com/verus-lang/verus/releases/download/release/${VERUS_VERSION}/${asset}"
+          curl -fsSL -o verus.zip "$url"
+          mkdir -p tools
+          unzip -q verus.zip -d tools
+          rm verus.zip
+
+      - name: Install the Rust toolchain Verus requires
+        run: rustup toolchain install --profile minimal "$RUST_TOOLCHAIN"
+
+      - name: Locate the binary
+        run: |
+          set -euo pipefail
+          # Found rather than assumed: the archive's directory name carries the
+          # platform, and hard-coding it is one more thing to get wrong.
+          bin=$(find tools -type f -name verus -perm -u+x | head -1)
+          test -n "$bin" || { echo "no verus binary under tools/"; find tools -maxdepth 2; exit 1; }
+          echo "VERUS=$bin" >> "$GITHUB_ENV"
+          "$bin" --version
+
+      - name: Verify, compile and run
+        run: ./verify.sh --run
