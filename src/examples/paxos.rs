@@ -99,6 +99,12 @@ pub open spec fn blt(x: Ballot, y: Ballot) -> bool {
 
 pub open spec fn ble(x: Ballot, y: Ballot) -> bool { x == y || blt(x, y) }
 
+pub proof fn lemma_blt_trans(x: Ballot, y: Ballot, z: Ballot)
+    requires blt(x, y), blt(y, z),
+    ensures  blt(x, z),
+{
+}
+
 pub proof fn lemma_ble_trans(x: Ballot, y: Ballot, z: Ballot)
     requires ble(x, y), ble(y, z),
     ensures  ble(x, z),
@@ -933,6 +939,15 @@ pub proof fn lemma_alog_shape(a: int)
     assert(seq![a][0] == a);
 }
 
+/// Distinct acceptors have distinct reply channels.
+pub proof fn lemma_p1b_inj(p: int, a1: int, a2: int)
+    requires p1b(p, a1) == p1b(p, a2),
+    ensures  a1 == a2,
+{
+    assert(seq![p, a1, 0][1] == a1);
+    assert(seq![p, a2, 0][1] == a2);
+}
+
 pub proof fn lemma_p1b_shape(p: int, a: int)
     ensures is_p1b(p1b(p, a)), p1b(p, a).ix[0] == p, p1b(p, a).ix[1] == a,
 {
@@ -1116,6 +1131,52 @@ pub proof fn lemma_quorum_nonempty(q: Set<int>)
     lemma_acceptors();
     if !(exists|a: int| q.contains(a)) {
         assert(q =~= Set::<int>::empty());
+    }
+}
+
+/// What a proposer has gathered so far in phase one: a set `q` of acceptors
+/// that have promised `b`, witnesses for each, and the highest report seen.
+pub open spec fn gathered_ok(
+    cs: Set<(ChanId, nat, PMsg)>, p: int, b: Ballot, q: Set<int>,
+    has_best: bool, best_bal: Ballot, best_val: u64,
+) -> bool {
+    &&& q.subset_of(acceptors())
+    &&& (forall|a: int| q.contains(a)
+            ==> exists|had: bool, ab: Ballot, av: u64| promised(cs, p, a, b, had, ab, av))
+    &&& (has_best ==> exists|a0: int|
+            q.contains(a0) && promised(cs, p, a0, b, true, best_bal, best_val))
+    &&& (forall|a: int, ab: Ballot, av: u64|
+            q.contains(a) && promised(cs, p, a, b, true, ab, av)
+                ==> has_best && ble(ab, best_bal))
+    // Nothing was gathered from outside `q`, or for another ballot. Without
+    // this the maximality clause could be broken by a promise the proposer
+    // never looked at.
+    &&& (forall|a: int, had: bool, ab: Ballot, av: u64|
+            promised(cs, p, a, b, had, ab, av) ==> q.contains(a))
+}
+
+/// Once the gathered set is a quorum, it discharges the proposer's phase-one
+/// obligation -- provided the value taken is the highest report, or anything at
+/// all if nobody reported.
+pub proof fn lemma_gathered_backs(
+    cs: Set<(ChanId, nat, PMsg)>, p: int, b: Ballot, q: Set<int>,
+    has_best: bool, best_bal: Ballot, best_val: u64, v: u64,
+)
+    requires
+        gathered_ok(cs, p, b, q, has_best, best_bal, best_val),
+        is_quorum(q),
+        has_best ==> v == best_val,
+    ensures
+        quorum_backs(cs, p, b, v),
+{
+    if has_best {
+        let a0 = choose|a0: int| q.contains(a0) && promised(cs, p, a0, b, true, best_bal, v);
+        assert(q.contains(a0) && promised(cs, p, a0, b, true, best_bal, v)
+            && forall|a: int, ab: Ballot, av: u64|
+                q.contains(a) && promised(cs, p, a, b, true, ab, av) ==> ble(ab, best_bal));
+    } else {
+        assert(forall|a: int, ab: Ballot, av: u64|
+            !(q.contains(a) && promised(cs, p, a, b, true, ab, av)));
     }
 }
 
@@ -1530,6 +1591,306 @@ impl Acceptor {
                 }
             }
             _ => { proof { assert(false); } }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The proposer, as running code
+// ---------------------------------------------------------------------------
+
+pub struct Proposer {
+    pub id: usize,
+    pub prepares: FanOut<PMsg, Paxos>,   // p1a(id, a)
+    /// A mailbox, not a per-acceptor endpoint: phase one must take whichever
+    /// promise arrives first, or a single silent acceptor stops the round.
+    pub promises: Inbox<PMsg, Paxos>,    // p1b(id, a)
+    pub accepts:  FanOut<PMsg, Paxos>,   // p2a(id, a)
+    pub log:      Out<PMsg, Paxos>,      // pdec(id)
+    pub bal: Ballot,
+    pub want: u64,
+    /// Phase-one accumulation: the witnesses gathered, who they came from, and
+    /// the highest report seen so far.
+    pub cs: Tracked<SetToken<(ChanId, nat, PMsg), NetSM::was_sent<PMsg, Paxos>>>,
+    pub q: Ghost<Set<int>>,
+    pub seen: Vec<bool>,
+    pub qn: usize,
+    pub has_best: bool,
+    pub best_bal: Ballot,
+    pub best_val: u64,
+}
+
+impl Proposer {
+    pub open spec fn na(&self) -> nat { self.prepares.len() }
+
+    pub open spec fn inv(&self) -> bool {
+        &&& self.prepares.wf() && self.promises.wf() && self.accepts.wf()
+        &&& self.log.wf() && self.log.id() == pdec(self.id as int)
+        &&& self.promises.len() == self.na() && self.accepts.len() == self.na()
+        &&& forall|a: int| 0 <= a < self.na()
+                ==> (#[trigger] self.promises.rxs@[a].id()) == p1b(self.id as int, a)
+        &&& self.na() == n_acc() && self.na() > 0
+        &&& self.prepares.ids@ =~= Seq::new(self.na(), |a: int| p1a(self.id as int, a))
+        &&& self.accepts.ids@  =~= Seq::new(self.na(), |a: int| p2a(self.id as int, a))
+        &&& self.prepares.iid() == self.log.iid()
+        &&& self.promises.iid() == self.log.iid()
+        &&& self.accepts.iid() == self.log.iid()
+        &&& self.bal.prop == self.id
+        // The commitments already made are all below the ballot in play, which
+        // is what the gate on the decision log asks.
+        &&& forall|x: int| 0 <= x < self.log.hist().len()
+                ==> (#[trigger] self.log.hist()[x]) is Decided
+                    && blt(self.log.hist()[x]->Decided_0, self.bal)
+        // Phase-one accumulation.
+        &&& self.cs@.instance_id() == self.log.iid()
+        &&& self.seen.len() == self.na()
+        &&& self.q@.finite() && self.q@.len() == self.qn && self.qn <= self.na()
+        &&& forall|a: int| 0 <= a < self.na()
+                ==> (self.q@.contains(a) <==> #[trigger] self.seen@[a])
+        &&& gathered_ok(self.cs@.set(), self.id as int, self.bal, self.q@,
+                        self.has_best, self.best_bal, self.best_val)
+    }
+
+    /// Phase two: commit a value and tell every acceptor.
+    ///
+    /// The commitment's justification is the whole gathered set, which is why
+    /// this is the one send in the development that genuinely needs
+    /// `send_general` rather than one of the fixed-arity forms.
+    ///
+    /// Committing ends the round: the ballot advances and the gathering starts
+    /// over, which is what a proposer that wants to propose again must do.
+    pub fn commit(&mut self)
+        requires
+            old(self).inv(),
+            2 * old(self).qn > n_acc(),
+            old(self).bal.round < u64::MAX,
+        ensures  final(self).inv(), final(self).na() == old(self).na(),
+    {
+        let v = if self.has_best { self.best_val } else { self.want };
+        proof {
+            assert(self.q@.len() == self.qn);
+            assert(is_quorum(self.q@));
+            lemma_gathered_backs(self.cs@.set(), self.id as int, self.bal, self.q@,
+                                 self.has_best, self.best_bal, self.best_val, v);
+            assert(self.log.id().ix[0] == self.id as int) by {
+                assert(seq![self.id as int][0] == self.id as int);
+            }
+        }
+        let ghost h0 = self.log.hist();
+        let Tracked(wd) = self.log.send_general(
+            PMsg::Decided(self.bal, v), Tracked(self.cs.borrow()));
+
+        // Tell every acceptor, each Accept pointing at the commitment.
+        let mut i: usize = 0;
+        while i < self.accepts.count()
+            invariant
+                0 <= i <= self.na(),
+                self.accepts.wf(), self.accepts.len() == self.na(),
+                self.accepts.ids@ =~= Seq::new(self.na(), |a: int| p2a(self.id as int, a)),
+                self.accepts.iid() == self.log.iid(),
+                self.bal.prop == self.id,
+                wd.instance_id() == self.log.iid(),
+                wd.element() == (pdec(self.id as int), h0.len(),
+                                 PMsg::Decided(self.bal, v)),
+            decreases self.na() - i,
+        {
+            proof { lemma_chan_shapes(self.id as int, i as int); }
+            self.accepts.send_caused(i, PMsg::Accept(self.bal, v), Tracked(&wd));
+            i = i + 1;
+        }
+
+        // Start the next round.
+        let old_bal = self.bal;
+        self.bal = Ballot { round: old_bal.round + 1, prop: self.id as u64 };
+        self.has_best = false;
+        self.qn = 0;
+        proof {
+            self.q = Ghost(Set::empty());
+            self.cs = Tracked(SetToken::empty(self.log.inst@.id()));
+        }
+        let mut j: usize = 0;
+        while j < self.seen.len()
+            invariant
+                0 <= j <= self.seen.len(),
+                self.seen.len() == self.na(),
+                forall|a: int| 0 <= a < j ==> !(#[trigger] self.seen@[a]),
+            decreases self.seen.len() - j,
+        {
+            self.seen.set(j, false);
+            j = j + 1;
+        }
+        assert forall|x: int| 0 <= x < self.log.hist().len()
+            implies (#[trigger] self.log.hist()[x]) is Decided
+                && blt(self.log.hist()[x]->Decided_0, self.bal) by {
+            if x < h0.len() {
+                assert(self.log.hist()[x] == h0[x]);
+                assert(blt(h0[x]->Decided_0, old_bal));
+                lemma_blt_trans(h0[x]->Decided_0, old_bal, self.bal);
+            } else {
+                assert(self.log.hist()[x] == PMsg::Decided(old_bal, v));
+            }
+        }
+        assert(gathered_ok(self.cs@.set(), self.id as int, self.bal, self.q@,
+                           self.has_best, self.best_bal, self.best_val)) by {
+            lemma_acceptors();
+        }
+        assert(forall|a: int| 0 <= a < self.na()
+            ==> (self.q@.contains(a) <==> #[trigger] self.seen@[a]));
+    }
+
+    /// Phase 1b: take one promise and fold it into what has been gathered.
+    ///
+    /// The interference point is the receive. Everything after it is a fact
+    /// about this proposer's own accumulation.
+    pub fn gather_one(&mut self)
+        requires old(self).inv(),
+        ensures  final(self).inv(), final(self).na() == old(self).na(),
+    {
+        let (k, m, Tracked(w)) = self.promises.recv_any_wit();
+        match m {
+            PMsg::Promise(b, had, ab, av) => {
+                if b == self.bal && !self.seen[k] {
+                    let ghost cs0 = self.cs@.set();
+                    let ghost we = w.element();
+                    let ghost q0 = self.q@;
+                    let ghost bb0 = self.best_bal;
+                    let ghost hb0 = self.has_best;
+                    let ghost bv0 = self.best_val;
+                    proof {
+                        lemma_acceptors();
+                        lemma_p1b_shape(self.id as int, k as int);
+                        assert(self.promises.rxs@[k as int].id()
+                               == p1b(self.id as int, k as int));
+                        self.cs.borrow_mut().insert(w);
+                        assert(self.cs@.set() =~= cs0.insert(we));
+                        assert(we == (p1b(self.id as int, k as int), we.1,
+                                      PMsg::Promise(self.bal, had, ab, av)));
+                        self.q = Ghost(self.q@.insert(k as int));
+                    }
+                    self.seen.set(k, true);
+                    proof {
+                        assert(!q0.contains(k as int));
+                        assert(self.q@.len() == q0.len() + 1);
+                        lemma_len_subset(self.q@, acceptors());
+                    }
+                    self.qn = self.qn + 1;
+                    if had && (!self.has_best || ballot_lt(self.best_bal, ab)) {
+                        self.has_best = true;
+                        self.best_bal = ab;
+                        self.best_val = av;
+                    }
+                    proof {
+                        lemma_ballot_total(ab, bb0);
+                        assert(self.q@.subset_of(acceptors()));
+                        assert(forall|a: int| 0 <= a < self.na()
+                            ==> (self.q@.contains(a) <==> #[trigger] self.seen@[a]));
+                        // Either the best was replaced by this report, or it
+                        // was left alone.
+                        assert((self.has_best && self.best_bal == ab && self.best_val == av)
+                            || (self.has_best == hb0 && self.best_bal == bb0
+                                && self.best_val == bv0));
+                        assert forall|a: int| self.q@.contains(a)
+                            implies exists|h2: bool, x2: Ballot, y2: u64| promised(
+                                self.cs@.set(), self.id as int, a, self.bal, h2, x2, y2) by {
+                            if a == k as int {
+                                assert(self.cs@.set().contains(we));
+                                assert(promised(self.cs@.set(), self.id as int, k as int,
+                                                self.bal, had, ab, av));
+                            } else {
+                                assert(q0.contains(a));
+                                let (h3, x3, y3) = choose|h: bool, x: Ballot, y: u64|
+                                    promised(cs0, self.id as int, a, self.bal, h, x, y);
+                                let i3 = choose|i: nat| cs0.contains(
+                                    (p1b(self.id as int, a), i,
+                                     PMsg::Promise(self.bal, h3, x3, y3)));
+                                assert(self.cs@.set().contains(
+                                    (p1b(self.id as int, a), i3,
+                                     PMsg::Promise(self.bal, h3, x3, y3))));
+                                assert(promised(self.cs@.set(), self.id as int, a,
+                                                self.bal, h3, x3, y3));
+                            }
+                        }
+                        if self.has_best {
+                            if self.best_bal == ab && self.best_val == av && had {
+                                assert(self.cs@.set().contains(we));
+                                assert(self.q@.contains(k as int)
+                                    && promised(self.cs@.set(), self.id as int, k as int,
+                                                self.bal, true, self.best_bal,
+                                                self.best_val));
+                            } else {
+                                let a0 = choose|a0: int| q0.contains(a0)
+                                    && promised(cs0, self.id as int, a0, self.bal,
+                                                true, bb0, bv0);
+                                let i0 = choose|i: nat| cs0.contains(
+                                    (p1b(self.id as int, a0), i,
+                                     PMsg::Promise(self.bal, true, bb0, bv0)));
+                                assert(self.cs@.set().contains(
+                                    (p1b(self.id as int, a0), i0,
+                                     PMsg::Promise(self.bal, true, bb0, bv0))));
+                                assert(self.q@.contains(a0)
+                                    && promised(self.cs@.set(), self.id as int, a0,
+                                                self.bal, true, self.best_bal,
+                                                self.best_val));
+                            }
+                        }
+                        // Every promise now in hand still comes from someone in
+                        // the gathered set, and no report beats the best.
+                        assert forall|a: int, had2: bool, ab2: Ballot, av2: u64|
+                            promised(self.cs@.set(), self.id as int, a, self.bal,
+                                     had2, ab2, av2) implies self.q@.contains(a) by {
+                            let i = choose|i: nat| self.cs@.set().contains(
+                                (p1b(self.id as int, a), i,
+                                 PMsg::Promise(self.bal, had2, ab2, av2)));
+                            let el = (p1b(self.id as int, a), i,
+                                      PMsg::Promise(self.bal, had2, ab2, av2));
+                            if el == we {
+                                lemma_p1b_inj(self.id as int, a, k as int);
+                            } else {
+                                assert(cs0.contains(el));
+                                assert(promised(cs0, self.id as int, a, self.bal,
+                                                had2, ab2, av2));
+                            }
+                        }
+                        assert forall|a: int, ab2: Ballot, av2: u64|
+                            self.q@.contains(a)
+                            && promised(self.cs@.set(), self.id as int, a, self.bal,
+                                        true, ab2, av2)
+                            implies self.has_best && ble(ab2, self.best_bal) by {
+                            let i = choose|i: nat| self.cs@.set().contains(
+                                (p1b(self.id as int, a), i,
+                                 PMsg::Promise(self.bal, true, ab2, av2)));
+                            let el = (p1b(self.id as int, a), i,
+                                      PMsg::Promise(self.bal, true, ab2, av2));
+                            if el == we {
+                                lemma_p1b_inj(self.id as int, a, k as int);
+                            } else {
+                                assert(cs0.contains(el));
+                                assert(promised(cs0, self.id as int, a, self.bal,
+                                                true, ab2, av2));
+                                assert(q0.contains(a));
+                                lemma_ble_trans(ab2, bb0, self.best_bal);
+                            }
+                        }
+                    }
+                }
+            }
+            // The reply channel carries only Promises.
+            _ => { proof { assert(false); } }
+        }
+    }
+
+    /// Phase 1a: ask every acceptor. All sends, so no interference point.
+    pub fn broadcast_prepare(&mut self)
+        requires old(self).inv(),
+        ensures  final(self).inv(), final(self).na() == old(self).na(),
+    {
+        let mut i: usize = 0;
+        while i < self.prepares.count()
+            invariant 0 <= i <= self.na(), self.inv(),
+            decreases self.na() - i,
+        {
+            self.prepares.send(i, PMsg::Prepare(self.bal));
+            i = i + 1;
         }
     }
 }
