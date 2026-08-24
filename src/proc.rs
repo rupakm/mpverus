@@ -716,13 +716,7 @@ impl<M, Inv: NetInv<M>> Inbox<M, Inv> {
 
         // One flag per peer, so a chatty peer cannot fill the quorum alone.
         let n = self.rxs.len();
-        let mut seen: Vec<bool> = Vec::new();
-        while seen.len() < n
-            invariant seen.len() <= n,
-            decreases n - seen.len(),
-        {
-            seen.push(false);
-        }
+        let mut seen: Vec<bool> = vec![false; n];
 
         while srcs.len() < need
             invariant

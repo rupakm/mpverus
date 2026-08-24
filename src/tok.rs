@@ -499,10 +499,10 @@ tokenized_state_machine!{
         }
 
         #[invariant]
-        pub spec fn protocol_extra_w(&self) -> bool { Inv::record_inv(self.was_sent) }
+        pub spec fn protocol_record_inv(&self) -> bool { Inv::record_inv(self.was_sent) }
 
         #[invariant]
-        pub spec fn protocol_extra(&self) -> bool { Inv::history_inv(self.sent) }
+        pub spec fn protocol_history_inv(&self) -> bool { Inv::history_inv(self.sent) }
 
         /// Nothing at or above the allocator's counter exists yet. This is what
         /// makes creating a channel sound without anyone seeing the whole

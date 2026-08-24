@@ -62,7 +62,7 @@ tokenized_state_machine!{
         }
 
         #[invariant]
-        pub spec fn protocol_extra(&self) -> bool { Inv::history_inv(self.sent) }
+        pub spec fn protocol_history_inv(&self) -> bool { Inv::history_inv(self.sent) }
 
         init!{ boot(chans: Set<ChanId>) {
             init sent = Map::new(chans, |c: ChanId| Seq::<M>::empty());

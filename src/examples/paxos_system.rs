@@ -238,10 +238,7 @@ pub fn deploy_paxos(live: usize, rounds: usize) -> (v: u64)
         // What this proposer would pick if phase one leaves it free. Only the
         // first round is free; after that a quorum has accepted something.
         if i > 0 { prop.want = 99; }
-        prop.broadcast_prepare();
-        let (w, Tracked(cs)) = prop.gather_quorum();
-        prop.commit(w, Tracked(cs));
-        v = w;
+        v = prop.round();
         i = i + 1;
     }
 
