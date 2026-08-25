@@ -143,12 +143,12 @@ impl NetInv<Elect> for CrTok {
 
     open spec fn deliverable_at(v: Seq<Elect>, i: nat) -> bool { fifo_deliverable(v, i) }
 
-    open spec fn extra(sent: Map<ChanId, Seq<Elect>>) -> bool { true }
+    open spec fn history_inv(sent: Map<ChanId, Seq<Elect>>) -> bool { true }
 
     // This protocol's guarantee is about single messages, so there is
     // nothing for a reader to conclude from a pair.
-    open spec fn extra_gives2(c: ChanId, m1: Elect, m2: Elect) -> bool { true }
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<Elect>>, c: ChanId,
+    open spec fn pair_gives(c: ChanId, m1: Elect, m2: Elect) -> bool { true }
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<Elect>>, c: ChanId,
                                 i: nat, j: nat, m1: Elect, m2: Elect) { }
 
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Elect>, m: Elect) { }
@@ -156,16 +156,16 @@ impl NetInv<Elect> for CrTok {
     open spec fn needs_cause(c: ChanId, m: Elect) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Elect, causes: Set<(ChanId, nat, Elect)>) { }
     // No cross-channel property to state over the record.
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, Elect)>) -> bool { true }
-    proof fn lemma_extra_w_init() { }
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, Elect)>) -> bool { true }
+    proof fn lemma_record_inv_init() { }
 
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Elect)>,
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Elect)>,
                                      c: ChanId, i: nat, m: Elect,
                                      causes: Set<(ChanId, nat, Elect)>) { }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Elect>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Elect>>,
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<Elect>>, c: ChanId) { }
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Elect>>,
                                    was_sent: Set<(ChanId, nat, Elect)>,
                                    c: ChanId, s: Seq<Elect>, m: Elect,
                                    causes: Set<(ChanId, nat, Elect)>) { }

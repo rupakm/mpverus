@@ -180,13 +180,17 @@ pub trait NetInv<M> : Sized {
     /// link FIFO says `fifo_deliverable`; an unreliable link says `true`.
     spec fn deliverable_at(v: Seq<M>, i: nat) -> bool;
 
-    /// An additional invariant over the send histories, for a guarantee that no
-    /// single message can express -- an ordering between messages, say. Most
-    /// protocols leave this `true`.
-    spec fn extra(sent: Map<ChanId, Seq<M>>) -> bool;
+    /// An invariant over the send HISTORIES, for a guarantee that no single
+    /// message can express -- an ordering between messages, say.
+    ///
+    /// Use this when the property needs the sequence: an ordered journal,
+    /// increasing sequence numbers. For a property that merely says some
+    /// message exists on another channel, use `record_inv` below, which is far
+    /// cheaper to preserve. Most protocols leave both `true`.
+    spec fn history_inv(sent: Map<ChanId, Seq<M>>) -> bool;
 
     /// What a reader may conclude about TWO messages it holds witnesses for,
-    /// given `extra`. This is how a pairwise guarantee is CONSUMED.
+    /// given `history_inv`. This is how a pairwise guarantee is CONSUMED.
     ///
     /// It must mention only `c`, `m1` and `m2`, for the same reason
     /// `cause_gives` must be pure: the histories are reached through a binding
@@ -194,19 +198,19 @@ pub trait NetInv<M> : Sized {
     ///
     /// Most protocols leave this `true`; a protocol whose guarantee is about
     /// pairs -- heartbeat's increasing sequence numbers -- states it here.
-    spec fn extra_gives2(c: ChanId, m1: M, m2: M) -> bool;
+    spec fn pair_gives(c: ChanId, m1: M, m2: M) -> bool;
 
     /// Two messages at known positions of one channel's history satisfy it.
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<M>>, c: ChanId,
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<M>>, c: ChanId,
                                 i: nat, j: nat, m1: M, m2: M)
         requires
-            Self::extra(sent),
+            Self::history_inv(sent),
             sent.dom().contains(c),
             i < j < sent[c].len(),
             sent[c][i as int] == m1,
             sent[c][j as int] == m2,
         ensures
-            Self::extra_gives2(c, m1, m2);
+            Self::pair_gives(c, m1, m2);
 
     /// The gate is strong enough to establish the guarantee for the message it
     /// admits. Immediate when the two are the same predicate.
@@ -250,22 +254,22 @@ pub trait NetInv<M> : Sized {
         ;
 
     /// The additional invariant holds of the initial state ...
-    proof fn lemma_extra_init(chans: Set<ChanId>)
-        ensures Self::extra(Map::new(chans, |c: ChanId| Seq::<M>::empty()));
+    proof fn lemma_history_inv_init(chans: Set<ChanId>)
+        ensures Self::history_inv(Map::new(chans, |c: ChanId| Seq::<M>::empty()));
 
     /// ... is preserved by creating a fresh, empty channel ...
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<M>>, c: ChanId)
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<M>>, c: ChanId)
         requires
-            Self::extra(sent),
+            Self::history_inv(sent),
             !sent.dom().contains(c),
         ensures
-            Self::extra(sent.insert(c, Seq::<M>::empty()));
+            Self::history_inv(sent.insert(c, Seq::<M>::empty()));
 
-    /// An additional invariant over the RECORD of what was sent, as opposed to
-    /// over the histories.
+    /// An invariant over the RECORD of what was sent, as opposed to over the
+    /// histories.
     ///
     /// This is the right home for a protocol-global property that relates
-    /// messages on different channels. `extra` is stated over `sent`, a map of
+    /// messages on different channels. `history_inv` is stated over `sent`, a map of
     /// sequences that changes structurally at every send, so preserving a
     /// cross-channel property there means reasoning about a map insertion and
     /// sequence indices at each step. `was_sent` only grows, so preservation
@@ -274,30 +278,30 @@ pub trait NetInv<M> : Sized {
     /// Measured on the same property, stated both ways: two lines of inductive
     /// step against twenty-one.
     ///
-    /// Use `extra` for a property of one channel's ORDER -- an ordered journal,
+    /// Use `history_inv` for a property of one channel's ORDER -- an ordered journal,
     /// increasing sequence numbers -- which needs the sequence. Use this for a
     /// property that says some message exists somewhere else.
-    spec fn extra_w(was_sent: Set<(ChanId, nat, M)>) -> bool;
+    spec fn record_inv(was_sent: Set<(ChanId, nat, M)>) -> bool;
 
     /// It holds of the empty record.
-    proof fn lemma_extra_w_init()
-        ensures Self::extra_w(Set::empty());
+    proof fn lemma_record_inv_init()
+        ensures Self::record_inv(Set::empty());
 
     /// Preserved by adding one element to the record. The witnesses the sender
     /// presented are available, which is what makes a cross-channel property
     /// provable at all.
-    proof fn lemma_extra_w_preserved(
+    proof fn lemma_record_inv_preserved(
         was_sent: Set<(ChanId, nat, M)>,
         c: ChanId, i: nat, m: M,
         causes: Set<(ChanId, nat, M)>,
     )
         requires
-            Self::extra_w(was_sent),
+            Self::record_inv(was_sent),
             Self::wit_inv(c, m),
             causes.subset_of(was_sent),
             Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
-            Self::extra_w(was_sent.insert((c, i, m)));
+            Self::record_inv(was_sent.insert((c, i, m)));
 
     /// ... and is preserved by a send the gate admits.
     ///
@@ -314,14 +318,14 @@ pub trait NetInv<M> : Sized {
     /// messages on many acceptors' channels, and the reason a proposer may send
     /// `Accept(b, v)` is precisely the quorum of promises it holds witnesses
     /// for. With only the gate available, that argument cannot be made.
-    proof fn lemma_extra_preserved(
+    proof fn lemma_history_inv_preserved(
         sent: Map<ChanId, Seq<M>>,
         was_sent: Set<(ChanId, nat, M)>,
         c: ChanId, s: Seq<M>, m: M,
         causes: Set<(ChanId, nat, M)>,
     )
         requires
-            Self::extra(sent), Self::gate(c, s, m),
+            Self::history_inv(sent), Self::gate(c, s, m),
             sent.dom().contains(c), sent[c] == s,
             // The machine's agreement invariant: a witness names a real
             // position of a real history.
@@ -331,7 +335,7 @@ pub trait NetInv<M> : Sized {
             causes.subset_of(was_sent),
             Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
-            Self::extra(sent.insert(c, s.push(m)));
+            Self::history_inv(sent.insert(c, s.push(m)));
 }
 
 /// Protocols whose delivery is deterministic: at most one index is deliverable
@@ -426,10 +430,10 @@ tokenized_state_machine!{
         }
 
         #[invariant]
-        pub spec fn protocol_extra_w(&self) -> bool { Inv::extra_w(self.was_sent) }
+        pub spec fn protocol_extra_w(&self) -> bool { Inv::record_inv(self.was_sent) }
 
         #[invariant]
-        pub spec fn protocol_extra(&self) -> bool { Inv::extra(self.sent) }
+        pub spec fn protocol_extra(&self) -> bool { Inv::history_inv(self.sent) }
 
         /// Nothing at or above the allocator's counter exists yet. This is what
         /// makes creating a channel sound without anyone seeing the whole
@@ -535,8 +539,8 @@ tokenized_state_machine!{
                 have was_sent >= set { (c, j, m2) };
                 require(i < j);
                 birds_eye let s = pre.sent;
-                assert(Inv::extra_gives2(c, m1, m2)) by {
-                    Inv::lemma_extra_gives2(s, c, i, j, m1, m2);
+                assert(Inv::pair_gives(c, m1, m2)) by {
+                    Inv::lemma_pair_gives(s, c, i, j, m1, m2);
                 };
             }
         }
@@ -553,8 +557,8 @@ tokenized_state_machine!{
 
         #[inductive(boot)]
         fn boot_inductive(post: Self, chans: Set<ChanId>) {
-            Inv::lemma_extra_init(chans);
-            Inv::lemma_extra_w_init();
+            Inv::lemma_history_inv_init(chans);
+            Inv::lemma_record_inv_init();
         }
 
         #[inductive(do_send)]
@@ -563,8 +567,8 @@ tokenized_state_machine!{
             c: ChanId, s: Seq<M>, m: M, causes: Set<(ChanId, nat, M)>,
         ) {
             Inv::lemma_gate_gives_inv(c, s, m);
-            Inv::lemma_extra_preserved(pre.sent, pre.was_sent, c, s, m, causes);
-            Inv::lemma_extra_w_preserved(pre.was_sent, c, s.len(), m, causes);
+            Inv::lemma_history_inv_preserved(pre.sent, pre.was_sent, c, s, m, causes);
+            Inv::lemma_record_inv_preserved(pre.was_sent, c, s.len(), m, causes);
             assert(post.was_sent =~= pre.was_sent.insert((c, s.len(), m)));
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
             assert forall|k: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((k, i, mm))
@@ -622,7 +626,7 @@ tokenized_state_machine!{
             }
             assert(post.sent =~= pre.sent
                 .insert(dyn_chan(fam, j, pre.next), Seq::<M>::empty()));
-            Inv::lemma_extra_alloc(pre.sent, dyn_chan(fam, j, pre.next));
+            Inv::lemma_history_inv_alloc(pre.sent, dyn_chan(fam, j, pre.next));
             assert forall|c: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((c, i, mm))
                 implies post.sent.dom().contains(c)
                     && i < post.sent[c].len() && post.sent[c][i as int] == mm by {

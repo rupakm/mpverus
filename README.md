@@ -93,7 +93,7 @@ reason counts as a failure of the suite, not a pass.
    `Process::wf`. Activity bodies carry no ghost arguments.
 3. Implement `NetInv`: the send gate, the guarantee about a message that was
    sent, the delivery discipline, and — only for a guarantee that no single
-   message can express — the `extra` invariant and its three lemmas.
+   message can express — the `history_inv` invariant and its three lemmas.
 4. Write the protocol as ordinary sequential Rust, using the library's `send`
    and `recv`, passing the state machine instance and the relevant channel
    token.

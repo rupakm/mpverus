@@ -95,7 +95,7 @@ impl NetInv<Msg> for Lease {
     open spec fn deliverable_at(v: Seq<Msg>, i: nat) -> bool { fifo_deliverable(v, i) }
 
     /// WRITE SERIALIZATION, as a system-wide invariant.
-    open spec fn extra(sent: Map<ChanId, Seq<Msg>>) -> bool {
+    open spec fn history_inv(sent: Map<ChanId, Seq<Msg>>) -> bool {
         sent.dom().contains(journal()) ==> serialized(sent[journal()])
     }
 
@@ -122,8 +122,8 @@ impl NetInv<Msg> for Lease {
 
     // This protocol's guarantee is about single messages, so there is
     // nothing for a reader to conclude from a pair.
-    open spec fn extra_gives2(c: ChanId, m1: Msg, m2: Msg) -> bool { true }
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<Msg>>, c: ChanId,
+    open spec fn pair_gives(c: ChanId, m1: Msg, m2: Msg) -> bool { true }
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<Msg>>, c: ChanId,
                                 i: nat, j: nat, m1: Msg, m2: Msg) { }
 
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Msg>, m: Msg) { }
@@ -137,19 +137,19 @@ impl NetInv<Msg> for Lease {
     }
 
     // No cross-channel property to state over the record.
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, Msg)>) -> bool { true }
-    proof fn lemma_extra_w_init() { }
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, Msg)>) -> bool { true }
+    proof fn lemma_record_inv_init() { }
 
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Msg)>,
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Msg)>,
                                      c: ChanId, i: nat, m: Msg,
                                      causes: Set<(ChanId, nat, Msg)>) { }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) {
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) {
         let s0 = Map::new(chans, |c: ChanId| Seq::<Msg>::empty());
         if s0.dom().contains(journal()) { assert(s0[journal()].len() == 0); }
     }
 
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) {
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) {
         let post = sent.insert(c, Seq::<Msg>::empty());
         if post.dom().contains(journal()) {
             assert forall|x: int, y: int| 0 <= x < y < post[journal()].len()
@@ -161,7 +161,7 @@ impl NetInv<Msg> for Lease {
 
     /// The gate is exactly what makes this go through: the new entry exceeds
     /// every existing one, and the existing ones were already ordered.
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>,
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Msg>>,
                                    was_sent: Set<(ChanId, nat, Msg)>,
                                    c: ChanId, s: Seq<Msg>, m: Msg,
                                    causes: Set<(ChanId, nat, Msg)>) {

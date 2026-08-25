@@ -22,7 +22,7 @@ verus!{
 /// The protocol. Its guarantee is about PAIRS of messages -- each beat's
 /// sequence number exceeds every earlier one -- which no statement about a
 /// single message can express. So `wit_inv` is trivial and the guarantee is
-/// carried by `extra`, the invariant over the send histories.
+/// carried by `history_inv`, the invariant over the send histories.
 pub struct HbTok;
 
 /// The link this node beats on.
@@ -42,7 +42,7 @@ impl NetInv<Beat> for HbTok {
     open spec fn deliverable_at(v: Seq<Beat>, i: nat) -> bool { fifo_deliverable(v, i) }
 
     /// The guarantee: beats on the link are numbered increasingly.
-    open spec fn extra(sent: Map<ChanId, Seq<Beat>>) -> bool {
+    open spec fn history_inv(sent: Map<ChanId, Seq<Beat>>) -> bool {
         sent.dom().contains(link()) ==>
             forall|x: int, y: int| 0 <= x < y < sent[link()].len()
                 ==> (#[trigger] sent[link()][x]).seq < (#[trigger] sent[link()][y]).seq
@@ -50,13 +50,13 @@ impl NetInv<Beat> for HbTok {
 
     /// THE PAIRWISE GUARANTEE, in the form a reader can use. `wit_inv` is
     /// `true` here because a witness names one message and this is about two;
-    /// `extra` states it over the histories, and this is how it comes back out
+    /// `history_inv` states it over the histories, and this is how it comes back out
     /// to someone who does not own the link.
-    open spec fn extra_gives2(c: ChanId, m1: Beat, m2: Beat) -> bool {
+    open spec fn pair_gives(c: ChanId, m1: Beat, m2: Beat) -> bool {
         c == link() ==> m1.seq < m2.seq
     }
 
-    proof fn lemma_extra_gives2(sent: Map<ChanId, Seq<Beat>>, c: ChanId,
+    proof fn lemma_pair_gives(sent: Map<ChanId, Seq<Beat>>, c: ChanId,
                                 i: nat, j: nat, m1: Beat, m2: Beat) {
         if c == link() {
             assert(sent[link()][i as int].seq < sent[link()][j as int].seq);
@@ -69,19 +69,19 @@ impl NetInv<Beat> for HbTok {
     proof fn lemma_cause_gives(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) { }
 
     // No cross-channel property to state over the record.
-    open spec fn extra_w(was_sent: Set<(ChanId, nat, Beat)>) -> bool { true }
-    proof fn lemma_extra_w_init() { }
+    open spec fn record_inv(was_sent: Set<(ChanId, nat, Beat)>) -> bool { true }
+    proof fn lemma_record_inv_init() { }
 
-    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Beat)>,
+    proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Beat)>,
                                      c: ChanId, i: nat, m: Beat,
                                      causes: Set<(ChanId, nat, Beat)>) { }
 
-    proof fn lemma_extra_init(chans: Set<ChanId>) {
+    proof fn lemma_history_inv_init(chans: Set<ChanId>) {
         let s0 = Map::new(chans, |c: ChanId| Seq::<Beat>::empty());
         if s0.dom().contains(link()) { assert(s0[link()].len() == 0); }
     }
 
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Beat>>, c: ChanId) {
+    proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<Beat>>, c: ChanId) {
         let post = sent.insert(c, Seq::<Beat>::empty());
         if post.dom().contains(link()) {
             assert forall|x: int, y: int| 0 <= x < y < post[link()].len()
@@ -91,7 +91,7 @@ impl NetInv<Beat> for HbTok {
         }
     }
 
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Beat>>,
+    proof fn lemma_history_inv_preserved(sent: Map<ChanId, Seq<Beat>>,
                                    was_sent: Set<(ChanId, nat, Beat)>,
                                    c: ChanId, s: Seq<Beat>, m: Beat,
                                    causes: Set<(ChanId, nat, Beat)>) {
@@ -189,7 +189,7 @@ impl Watcher {
     /// THE PAYOFF. The watcher owns no send history and cannot read the link,
     /// yet it concludes that the two beats it was handed increase.
     ///
-    /// Before `learn_pair` existed this was not statable: `extra` was proved
+    /// Before `learn_pair` existed this was not statable: `history_inv` was proved
     /// and there was no way to get at it from code.
     pub fn two_increase(&mut self) -> (r: (Beat, Beat))
         requires old(self).inv(),

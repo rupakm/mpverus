@@ -683,7 +683,7 @@ fact about state it does not own --- Section~\ref{sec:provenance} is the case
 \emph{pure predicate over values the reader can name}. A pure fact cannot later
 become false, so it is stable for a third reason. The \code{birds\_eye} binding
 going out of scope is what prevents keeping anything else, and it is why
-\code{cause\_gives} and \code{extra\_gives2} have the shape they do.
+\code{cause\_gives} and \code{pair\_gives} have the shape they do.
 
 \subsection*{The side condition on every future field}
 
@@ -753,7 +753,7 @@ specification. One of those was a real hole, closed this way.
 \textbf{Purity is the export mechanism.} Anything learned about unowned state
 must be projected to a pure predicate or it is lost when the binding goes out of
 scope. This is the constraint behind \code{cause\_gives} and
-\code{extra\_gives2}, and it is the one rule in this development most easily
+\code{pair\_gives}, and it is the one rule in this development most easily
 discovered the hard way.
 
 % ===========================================================================
@@ -811,12 +811,12 @@ impl NetInv<Msg> for PingPong {
 
     open spec fn deliverable_at(v: Seq<Msg>, i: nat) -> bool { fifo_deliverable(v, i) }
 
-    open spec fn extra(sent: Map<ChanId, Seq<Msg>>) -> bool { true }
+    open spec fn history\_inv(sent: Map<ChanId, Seq<Msg>>) -> bool { true }
 
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Msg>, m: Msg) { }
-    proof fn lemma_extra_init(chans: Set<ChanId>) { }
-    proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(...) { }
+    proof fn lemma_history\_inv_init(chans: Set<ChanId>) { }
+    proof fn lemma_history\_inv_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) { }
+    proof fn lemma_history\_inv_preserved(...) { }
 }
 \end{lstlisting}
 
@@ -841,7 +841,7 @@ happens when they differ.
 consumed on a channel, which index may arrive next. Per-link FIFO pins it to the
 current length. Section~\ref{sec:unreliable} gives the other case.
 
-\textbf{\code{extra}} is for a guarantee no statement about a single message can
+\textbf{\code{history\_inv}} is for a guarantee no statement about a single message can
 express --- an ordering \emph{between} messages, say. Most protocols leave it
 \code{true}; Section~\ref{sec:machine} returns to the one that does not.
 
@@ -1044,8 +1044,8 @@ pub spec fn protocol_inv(&self) -> bool {
     forall|c, i, m| self.was_sent.contains((c, i, m)) ==> Inv::wit_inv(c, m)
 }
 
-#[invariant]                            // the protocol's extra guarantee
-pub spec fn protocol_extra(&self) -> bool { Inv::extra(self.sent) }
+#[invariant]                            // the protocol's history\_inv guarantee
+pub spec fn protocol_history\_inv(&self) -> bool { Inv::history\_inv(self.sent) }
 
 #[invariant]                            // nothing at or above the counter exists
 pub spec fn unallocated(&self) -> bool { ... }
@@ -1061,7 +1061,7 @@ and it is the whole of the proof the machine demands of a send:
 #[inductive(do_send)]
 fn do_send_inductive(pre: Self, post: Self, c: ChanId, s: Seq<M>, m: M) {
     Inv::lemma_gate_gives_inv(c, s, m);
-    Inv::lemma_extra_preserved(pre.sent, c, s, m);
+    Inv::lemma_history\_inv_preserved(pre.sent, c, s, m);
     ...
 }
 \end{lstlisting}
@@ -1069,7 +1069,7 @@ fn do_send_inductive(pre: Self, post: Self, c: ChanId, s: Seq<M>, m: M) {
 A protocol's obligations are therefore small and fixed. \code{gate} must be
 strong enough to establish \code{wit\_inv} for the message it admits ---
 immediate when they are the same predicate, which is the usual case. And
-\code{extra} must hold initially and be preserved by a send and by the creation
+\code{history\_inv} must hold initially and be preserved by a send and by the creation
 of a channel.
 
 Finally, how a thread uses the invariant:
@@ -1096,7 +1096,7 @@ They coincide whenever the gate constrains the message alone. They cannot
 coincide when a protocol's guarantee is about \emph{pairs} of messages, because
 a witness names one message. \code{heartbeat.rs} is the case: each beat's
 sequence number must exceed every earlier one on the link. Its \code{wit\_inv}
-is \code{true} and the guarantee lives in \code{extra}:
+is \code{true} and the guarantee lives in \code{history\_inv}:
 
 \srcname{src/examples/heartbeat.rs}
 \begin{lstlisting}
@@ -1104,7 +1104,7 @@ open spec fn gate(c: ChanId, s: Seq<Beat>, m: Beat) -> bool {
     forall|x: int| 0 <= x < s.len() ==> (#[trigger] s[x]).seq < m.seq
 }
 open spec fn wit_inv(c: ChanId, m: Beat) -> bool { true }
-open spec fn extra(sent: Map<ChanId, Seq<Beat>>) -> bool {
+open spec fn history\_inv(sent: Map<ChanId, Seq<Beat>>) -> bool {
     sent.dom().contains(link()) ==>
         forall|x: int, y: int| 0 <= x < y < sent[link()].len()
             ==> (#[trigger] sent[link()][x]).seq < (#[trigger] sent[link()][y]).seq
@@ -1112,14 +1112,14 @@ open spec fn extra(sent: Map<ChanId, Seq<Beat>>) -> bool {
 \end{lstlisting}
 
 Note that the gate reads the history \code{s}, which is what \code{wit\_inv}
-cannot do. The three \code{extra} lemmas are then not empty, and they are one of
+cannot do. The three \code{history\_inv} lemmas are then not empty, and they are one of
 the two places in the example protocols where a protocol writes a real proof
 about its own invariant; the other is the journal ordering in
 \code{leaselock.rs}.
 
 Stating a pairwise guarantee is only half of it. A service that \emph{owns} the
 channel reads the ordering straight off its own send history; a service that
-does not own it needs a way to get at \code{extra} from code, and until recently
+does not own it needs a way to get at \code{history\_inv} from code, and until recently
 there was none --- heartbeat's guarantee was proved and unusable.
 
 The way out mirrors the mechanism of Section~\ref{sec:provenance}: two witnesses
@@ -1133,12 +1133,12 @@ property!{
         have was_sent >= set { (c, j, m2) };
         require(i < j);
         birds_eye let s = pre.sent;
-        assert(Inv::extra_gives2(c, m1, m2)) by { Inv::lemma_extra_gives2(...); };
+        assert(Inv::history\_inv_gives2(c, m1, m2)) by { Inv::lemma_history\_inv_gives2(...); };
     }
 }
 \end{lstlisting}
 
-\code{extra\_gives2} must mention only \code{c} and the two messages, for the
+\code{pair\_gives} must mention only \code{c} and the two messages, for the
 same reason as \code{cause\_gives} below: the histories are reached through a
 binding the reader cannot name, so anything said about them is projected away.
 Heartbeat's is \code{c == link() ==> m1.seq < m2.seq}, and its watcher --- which
@@ -1470,7 +1470,7 @@ is about modular arithmetic and identifiers, and is independent of the framework
 
 Everything a protocol has said so far is confined to one channel. A gate is
 given the history of the channel being written and the message being placed on
-it; \code{wit\_inv} is given even less; \code{extra} ranges over the send
+it; \code{wit\_inv} is given even less; \code{history\_inv} ranges over the send
 histories but is established one send at a time, by a thread that holds only the
 channel it is writing. This is what makes the reasoning local, and it is also a
 real limit. Some properties are about a message on one channel and a message on
@@ -2075,7 +2075,7 @@ For a reader who wants the short version of what writing a protocol involves:
 \item Declare the message type and the protocol's parameters.
 \item Implement \code{NetInv}: the gate, the guarantee about a message that was
   sent, the delivery discipline, and --- only for a guarantee no single message
-  can express --- the \code{extra} invariant and its three lemmas. A guarantee
+  can express --- the \code{history\_inv} invariant and its three lemmas. A guarantee
   that relates messages on \emph{different} channels additionally needs
   \code{needs\_cause}, \code{caused\_by}, \code{cause\_gives} and one lemma
   (Section~\ref{sec:provenance}); all four default to saying nothing.

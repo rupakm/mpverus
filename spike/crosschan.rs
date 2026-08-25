@@ -5,7 +5,7 @@
 // The protocol: an `Ack(v)` on `ack(k)` must point at a `Req(v)` on `req(k)`.
 // The invariant wanted: every Ack ever sent has a matching Req.
 //
-// PATTERN A states it over `sent` -- a map of sequences, which is what `extra`
+// PATTERN A states it over `sent` -- a map of sequences, which is what `history_inv`
 // takes today. PATTERN B states it over `was_sent` -- a set that only grows.
 use vstd::prelude::*;
 use vstd::tokens::{InstanceId, ElementToken};
