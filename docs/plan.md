@@ -1789,3 +1789,190 @@ item-level macros inside `verus!`.
 **`system.rs` builds its fans in a loop** and pays about fifty lines of
 bookkeeping that `FanOut::add` and `FanIn::add` now absorb. Untouched because it
 is outside the branch.
+
+# Constructs experiment
+
+Run on branch `refinement-experiment` to decide, on evidence rather than
+design, whether Phase 3's two tiers earn their place. One construct per round,
+with the comparison fixed before the results were seen.
+
+## Round 1 — T1, a refinement mapping (`NetAbs`) — **DISCARDED**
+
+A separate trait: abstract state and actions, a mapping, and one obligation per
+protocol whose arguments and hypotheses are exactly `do_send`'s. Implemented for
+the lease lock, with the journal as the model: a sequence of accepted writes,
+strictly increasing in (token, sequence). Verified first try.
+
+**It bought nothing.** That property is already proved, as `history_inv`'s
+`serialized(sent[journal()])`, maintained by `lemma_history_inv_preserved` in
+fifteen lines. The T1 version needed 75 lines of trait and 107 of protocol to
+state the same fact, and stated it more weakly: the existing invariant holds at
+every reachable state and is maintained by the machine, while the model-level
+lemma still needs an external induction before it says anything about the
+running program.
+
+Generalised: `history_inv` and `record_inv` already accept any invariant over
+the global message histories, and EVERY safety property in this development is
+of that form, Paxos agreement included. For those, T1 is cost without power. Its
+value can only be trace refinement against an external model — Phases 5 and 6,
+which are not started.
+
+Removed from `src/`. Recoverable from commit `a69d422` if a Leslie model ever
+arrives. One design point survives: such a mapping should read `sent`, not
+`was_sent` — equally monotone, and it carries per-channel order natively.
+
+## Round 2 — T2, protocol state in the machine — **WORKS, NOT YET INTEGRATED**
+
+Target: the property round 1 was shown unable to reach — the lease lock's global
+grant monotonicity. `spike/pstate_grants.rs` is that protocol cut to its bones,
+with the server's counter as a machine field. Provable: every issued token is
+bounded by the counter, so a grant strictly exceeds every token issued before it
+across all writers' channels, and no token is ever issued twice, which is what
+the fencing argument wants.
+
+**A correction to the shape proposed above.** §"Protocol state in the network
+machine" proposes `do_pstep` to advance a participant's state alongside the
+existing `do_send`. Separate transitions do not suffice: a server could read its
+counter, send two grants and bump once. Removing the counter bump makes the
+inductive step fail, which is the check rather than the argument. The send and
+the state update must be ONE transition, which forces the caller to hold both
+the channel's token and the counter — precisely the definition of the server.
+The ownership discipline delivers the exclusion; no lock is needed.
+
+**Cost, measured.** A field on the shared machine; a fourth transition whose
+inductive proof must re-establish all seven `NetSM` invariants, where the
+existing `do_send_inductive` is 40 lines; three more members on a `NetInv` that
+already has 22; about four lines of unit-typed boilerplate in each of nine
+protocols, eight of which want none of it, unavoidable because Rust has no
+stable associated-type defaults and the macro that would absorb it does not
+survive `verus!`; and a new trusted primitive plus an `Out` method carrying the
+state token.
+
+**Decision: hold.** Nothing in `src/` needs it — the lease lock's fencing works
+today without global grant monotonicity. Integrate when a protocol requires it,
+and let that protocol pay for it.
+
+The asymmetry reversed the expectation going in: the cheap construct bought
+nothing and the expensive one buys something real.
+
+# What protocols can we prove?
+
+A survey against what the development actually has, written before choosing the
+next one. The point is to pick targets that teach something, and to be clear
+about which families are closed off and why.
+
+## What decides it
+
+Four limits bound the whole space. None is a missing lemma; each is a property
+of the model.
+
+**Every participant runs verified code.** A gate constrains the SENDER, so a
+sender that was not verified is not constrained by anything.
+`counterexamples/dishonest_participant.rs` tests a verified participant trying
+to cheat, which is a different thing. Byzantine tolerance would need evidence
+the RECEIVER checks and cannot be forged — signatures — which is a different
+mechanism, not a bigger invariant.
+
+**There is no global order across channels.** `was_sent` carries per-channel
+positions, so two sends on different channels are unordered unless a provenance
+edge links them. Anything whose statement is "event A happened before event B"
+for independent A and B is not expressible.
+
+**Membership is static.** Endpoints cannot travel over channels, so every roster
+is fixed when the deployment is built.
+
+**Safety only.** Nothing in the development says a round ever completes, and
+`Inbox::collect` waives its termination check deliberately.
+
+One more, softer: a participant's CURRENT local state cannot bound what it sends
+across several channels. The workaround is the single-owned-log pattern — route
+the state through a channel the participant alone writes, which puts it in
+`sent` where anyone may reason about it, at the cost of a message per state
+change. Paxos uses this throughout. Where it is too expensive, that is what
+`pstate` is for.
+
+## Ready with what we have
+
+**Reliable broadcast (echo-based, crash-tolerant).** Deliver a value only once a
+quorum has echoed it. Safety: two correct participants never deliver different
+values for the same (sender, sequence), by quorum intersection. Stresses
+set-valued `caused_by` and `cause_gives` with a set of causes — the only
+protocol besides Paxos that would, and Paxos exercises it at exactly one send.
+Small. This is the ladder's rung 2, never built.
+
+**ABD single-writer multi-reader atomic register.** The writer tags values with
+(sequence, id) and writes to a majority; a reader reads a majority, takes the
+highest tag, and WRITES BACK before returning. Safety: regularity, then
+atomicity. Stresses quorum intersection twice, and the write-back phase, which
+has no analogue in Paxos. Each replica's (tag, value) goes through an owned log.
+The canonical quorum protocol below Paxos, and small.
+
+**Chain replication (fixed chain).** Replicas in a line; updates flow head to
+tail, reads at the tail. Safety: the tail's history is a prefix of the head's.
+A relation between owned logs, so the existing tools reach it, and it is a
+useful contrast because it is not a quorum protocol at all — different shape,
+same machinery. Reconfiguration is out of reach; the fixed chain is not.
+
+**Multi-decree Paxos.** Slot-indexed. Phase one is per-ballot and shared across
+slots, phase two per slot, so `record_inv`'s clauses gain a slot parameter and
+the proposer's obligation becomes per-slot under one phase-one result. This is
+the honest test of whether one inductive invariant over `was_sent` scales, which
+is the open question the Paxos work left. Moderate.
+
+**Viewstamped Replication, without reconfiguration.** The view change is
+structurally Paxos phase one; the log is a sequence with a commit point, so the
+invariant relates prefixes of one owned log, which `record_inv` handles because
+it carries indices. Moderate to large, and mostly a re-use of the Paxos
+argument in different clothes.
+
+**Raft, without membership change.** The Log Matching Property relates two
+replicas' logs entry by entry, which with owned logs is a relation between two
+histories in `sent`. At most one leader per term is quorum intersection. The
+hard part is the commitment rule and the restriction that a leader may only
+commit entries from its own term — which is where real Raft proofs are hard, and
+nothing here makes it easier. Largest of the six.
+
+## Would need `pstate`
+
+**Fenced register with a monotone lease counter.** Global grant monotonicity,
+i.e. exactly what `spike/pstate_grants.rs` proves. The smallest genuine consumer
+of the construct, and the one that would justify integrating it.
+
+**Mutual exclusion with a local "in critical section" bit.** "At most one
+participant has the bit set" is an invariant over the `pstate` map and nothing
+else.
+
+**A boundary case worth trying first: token-ring mutual exclusion.** If holding
+the token is having received it and not yet passed it on, then "exactly one
+token is in flight" is a statement about `sent` and `recvd`, both of which are
+machine fields — so it may be provable with no new construct at all, while "at
+most one participant is in its critical section" needs the local bit. Cheap, and
+it would sharpen exactly where the line falls.
+
+## Out of reach, and what each would need
+
+**Chandy--Lamport snapshots, causal broadcast, vector clocks, timestamp-based
+total order.** All need happens-before across channels. `pstate` plus a
+published logical clock is the route; see §"Protocol state in the network
+machine", whose third motivating bullet is this.
+
+**Reconfiguration, VR and Raft membership change, any server that accepts
+connections, runnable RPC.** All need endpoints that can travel over channels —
+one missing capability behind four limitations.
+
+**PBFT, Tendermint, HotStuff, any Byzantine protocol.** Needs receiver-checked
+unforgeable evidence rather than sender-side gates. A different mechanism.
+
+**Anything stated as liveness** — leader election terminates, Raft makes
+progress, a Paxos round completes under a stable leader.
+
+## Recommended order
+
+1. **Reliable broadcast**, then **ABD**. Both small, and between them they
+   exercise set-valued causes and the read-back pattern, neither of which the
+   current protocols reach.
+2. **Token-ring mutual exclusion**, to locate the `pstate` boundary cheaply.
+3. **Multi-decree Paxos**, as the scaling test.
+4. **Chain replication**, as a cheap non-quorum contrast.
+5. **VR**, then **Raft**, only after step 3 says whether the invariant style
+   holds up at scale.

@@ -19,7 +19,6 @@
 // `!needs_cause`.
 #[path = "../src/tok.rs"]                 pub mod tok;
 #[path = "../src/proc.rs"]                pub mod proc;
-#[path = "../src/abs.rs"]                 pub mod abs;
 #[path = "../src/layer.rs"]               pub mod layer;
 #[path = "../src/examples/leaselock.rs"]  pub mod leaselock;
 

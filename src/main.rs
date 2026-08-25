@@ -4,7 +4,6 @@
 pub mod tok;
 pub mod layer;
 pub mod proc;
-pub mod abs;
 pub mod quorum;
 
 // Protocols written against it.
