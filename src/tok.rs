@@ -261,11 +261,75 @@ pub trait NetInv<M> : Sized {
         ensures
             Self::extra(sent.insert(c, Seq::<M>::empty()));
 
+    /// An additional invariant over the RECORD of what was sent, as opposed to
+    /// over the histories.
+    ///
+    /// This is the right home for a protocol-global property that relates
+    /// messages on different channels. `extra` is stated over `sent`, a map of
+    /// sequences that changes structurally at every send, so preserving a
+    /// cross-channel property there means reasoning about a map insertion and
+    /// sequence indices at each step. `was_sent` only grows, so preservation
+    /// here is only ever about the ONE element just added.
+    ///
+    /// Measured on the same property, stated both ways: two lines of inductive
+    /// step against twenty-one.
+    ///
+    /// Use `extra` for a property of one channel's ORDER -- an ordered journal,
+    /// increasing sequence numbers -- which needs the sequence. Use this for a
+    /// property that says some message exists somewhere else.
+    spec fn extra_w(was_sent: Set<(ChanId, nat, M)>) -> bool;
+
+    /// It holds of the empty record.
+    proof fn lemma_extra_w_init()
+        ensures Self::extra_w(Set::empty());
+
+    /// Preserved by adding one element to the record. The witnesses the sender
+    /// presented are available, which is what makes a cross-channel property
+    /// provable at all.
+    proof fn lemma_extra_w_preserved(
+        was_sent: Set<(ChanId, nat, M)>,
+        c: ChanId, i: nat, m: M,
+        causes: Set<(ChanId, nat, M)>,
+    )
+        requires
+            Self::extra_w(was_sent),
+            Self::wit_inv(c, m),
+            causes.subset_of(was_sent),
+            Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
+        ensures
+            Self::extra_w(was_sent.insert((c, i, m)));
+
     /// ... and is preserved by a send the gate admits.
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<M>>, c: ChanId, s: Seq<M>, m: M)
+    ///
+    /// This lemma is handed everything the machine knows at the moment of the
+    /// send, not just the gate. A guarantee about ONE channel needs only the
+    /// gate; a guarantee relating messages on DIFFERENT channels cannot be
+    /// preserved from the gate alone, because a gate reads one history. What
+    /// makes such a guarantee provable is the same thing that makes the send
+    /// legal in the first place: the witnesses the sender presented. So they
+    /// are passed in, together with the record they came from and the machine's
+    /// agreement invariant relating that record to the histories.
+    ///
+    /// Paxos is the protocol that forced this. Its safety argument is about
+    /// messages on many acceptors' channels, and the reason a proposer may send
+    /// `Accept(b, v)` is precisely the quorum of promises it holds witnesses
+    /// for. With only the gate available, that argument cannot be made.
+    proof fn lemma_extra_preserved(
+        sent: Map<ChanId, Seq<M>>,
+        was_sent: Set<(ChanId, nat, M)>,
+        c: ChanId, s: Seq<M>, m: M,
+        causes: Set<(ChanId, nat, M)>,
+    )
         requires
             Self::extra(sent), Self::gate(c, s, m),
             sent.dom().contains(c), sent[c] == s,
+            // The machine's agreement invariant: a witness names a real
+            // position of a real history.
+            forall|k: ChanId, i: nat, mm: M| (#[trigger] was_sent.contains((k, i, mm)))
+                ==> sent.dom().contains(k) && i < sent[k].len() && sent[k][i as int] == mm,
+            // The witnesses the sender presented, and what they justify.
+            causes.subset_of(was_sent),
+            Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
             Self::extra(sent.insert(c, s.push(m)));
 }
@@ -360,6 +424,9 @@ tokenized_state_machine!{
                     ==> exists|causes: Set<(ChanId, nat, M)>|
                             causes.subset_of(self.was_sent) && Inv::caused_by(c, m, causes)
         }
+
+        #[invariant]
+        pub spec fn protocol_extra_w(&self) -> bool { Inv::extra_w(self.was_sent) }
 
         #[invariant]
         pub spec fn protocol_extra(&self) -> bool { Inv::extra(self.sent) }
@@ -487,6 +554,7 @@ tokenized_state_machine!{
         #[inductive(boot)]
         fn boot_inductive(post: Self, chans: Set<ChanId>) {
             Inv::lemma_extra_init(chans);
+            Inv::lemma_extra_w_init();
         }
 
         #[inductive(do_send)]
@@ -495,7 +563,9 @@ tokenized_state_machine!{
             c: ChanId, s: Seq<M>, m: M, causes: Set<(ChanId, nat, M)>,
         ) {
             Inv::lemma_gate_gives_inv(c, s, m);
-            Inv::lemma_extra_preserved(pre.sent, c, s, m);
+            Inv::lemma_extra_preserved(pre.sent, pre.was_sent, c, s, m, causes);
+            Inv::lemma_extra_w_preserved(pre.was_sent, c, s.len(), m, causes);
+            assert(post.was_sent =~= pre.was_sent.insert((c, s.len(), m)));
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
             assert forall|k: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((k, i, mm))
                 implies post.sent.dom().contains(k)

@@ -85,10 +85,20 @@ impl NetInv<Item> for CollTok {
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Item) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) { }
+    // No cross-channel property to state over the record.
+    open spec fn extra_w(was_sent: Set<(ChanId, nat, Item)>) -> bool { true }
+    proof fn lemma_extra_w_init() { }
+
+    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Item)>,
+                                     c: ChanId, i: nat, m: Item,
+                                     causes: Set<(ChanId, nat, Item)>) { }
+
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Item>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Item>>, c: ChanId,
-                                   s: Seq<Item>, m: Item) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Item>>,
+                                   was_sent: Set<(ChanId, nat, Item)>,
+                                   c: ChanId, s: Seq<Item>, m: Item,
+                                   causes: Set<(ChanId, nat, Item)>) { }
 }
 }
 

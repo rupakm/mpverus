@@ -22,7 +22,7 @@ Reading order:
    refinement stack.
 5. `docs/movers.pdf` for the ideas, `docs/plan.md` for what is open.
 
-Current state: 158 verified, 0 errors, no `assume` or `admit`, nine behavioural
+Current state: 196 verified, 0 errors, no `assume` or `admit`, nine behavioural
 `external_body` declarations.
 
 ## Working method
@@ -370,6 +370,36 @@ for actions that are always internal.
 Capture `let ghost pre_x = self.x;` at the top of the activity — `old(self)` is
 not available in the body — and assert the disjunct you took at the end of each
 branch.
+
+## Where to state a protocol-global invariant
+
+Two hooks, and choosing the wrong one costs an order of magnitude.
+
+**`extra`, over `sent`.** For a property of ONE channel's ORDER: an ordered
+journal, increasing sequence numbers. It needs the sequence, so it has to live
+here.
+
+**`extra_w`, over `was_sent`.** For a property that says *some message exists
+somewhere else* -- anything relating two channels. `was_sent` only grows, so
+preservation concerns the ONE element just added. `sent` is a map of sequences
+that changes structurally at every send, so the same property stated there means
+reasoning about a map insertion and sequence indices every time.
+
+Measured on one property, stated both ways in `spike/crosschan.rs`: **two lines
+of inductive step against twenty-one.** Both verify, so this is a cost
+difference rather than a capability one -- but at twenty-one lines per property
+per protocol it decides whether a proof is written at all. The Paxos clause was
+abandoned in the `sent` form and went through in the `was_sent` form.
+
+Both preservation lemmas receive the witnesses the sender presented. That is
+what makes a cross-channel property provable at all: a gate reads one history,
+and the reason the send was legal is the cause.
+
+One trap when writing the guard. Say "this channel is an X channel" **by
+equality** -- `c == p2b(c.ix[0], c.ix[1])` -- not by picking the name apart
+(`c.fam == 4 && c.ix.len() == 3`). The second does not pin every index, so
+`wit_inv` cannot be instantiated at it, and the guarantee attached to the
+channel is unavailable. This cost a round trip.
 
 ## Some properties are types, not proofs
 

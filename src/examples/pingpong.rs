@@ -69,10 +69,20 @@ impl NetInv<Msg> for PingPong {
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Msg) -> bool { false }
     proof fn lemma_cause_gives(c: ChanId, m: Msg, causes: Set<(ChanId, nat, Msg)>) { }
+    // No cross-channel property to state over the record.
+    open spec fn extra_w(was_sent: Set<(ChanId, nat, Msg)>) -> bool { true }
+    proof fn lemma_extra_w_init() { }
+
+    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Msg)>,
+                                     c: ChanId, i: nat, m: Msg,
+                                     causes: Set<(ChanId, nat, Msg)>) { }
+
     proof fn lemma_extra_init(chans: Set<ChanId>) { }
     proof fn lemma_extra_alloc(sent: Map<ChanId, Seq<Msg>>, c: ChanId) { }
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>, c: ChanId,
-                                   s: Seq<Msg>, m: Msg) { }
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>,
+                                   was_sent: Set<(ChanId, nat, Msg)>,
+                                   c: ChanId, s: Seq<Msg>, m: Msg,
+                                   causes: Set<(ChanId, nat, Msg)>) { }
 }
 
 /// Delivery here is deterministic, so this protocol could use a remote call.

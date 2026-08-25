@@ -136,6 +136,14 @@ impl NetInv<Msg> for Lease {
         assert(causes.contains((acq_rsp(c.ix[0]), j, Msg::Granted(m->Write_0))));
     }
 
+    // No cross-channel property to state over the record.
+    open spec fn extra_w(was_sent: Set<(ChanId, nat, Msg)>) -> bool { true }
+    proof fn lemma_extra_w_init() { }
+
+    proof fn lemma_extra_w_preserved(was_sent: Set<(ChanId, nat, Msg)>,
+                                     c: ChanId, i: nat, m: Msg,
+                                     causes: Set<(ChanId, nat, Msg)>) { }
+
     proof fn lemma_extra_init(chans: Set<ChanId>) {
         let s0 = Map::new(chans, |c: ChanId| Seq::<Msg>::empty());
         if s0.dom().contains(journal()) { assert(s0[journal()].len() == 0); }
@@ -153,8 +161,10 @@ impl NetInv<Msg> for Lease {
 
     /// The gate is exactly what makes this go through: the new entry exceeds
     /// every existing one, and the existing ones were already ordered.
-    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>, c: ChanId,
-                                   s: Seq<Msg>, m: Msg) {
+    proof fn lemma_extra_preserved(sent: Map<ChanId, Seq<Msg>>,
+                                   was_sent: Set<(ChanId, nat, Msg)>,
+                                   c: ChanId, s: Seq<Msg>, m: Msg,
+                                   causes: Set<(ChanId, nat, Msg)>) {
         let post = sent.insert(c, s.push(m));
         if post.dom().contains(journal()) {
             assert forall|x: int, y: int| 0 <= x < y < post[journal()].len()
