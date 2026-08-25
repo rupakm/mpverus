@@ -66,6 +66,15 @@ impl NetInv<Beat> for HbTok {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Beat>, m: Beat) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Beat) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) -> bool { false }
+    open spec fn caused_by1(c: ChanId, m: Beat, d: ChanId, j: nat, m2: Beat) -> bool { false }
+    proof fn lemma_caused_by1(c: ChanId, m: Beat, d: ChanId, j: nat, m2: Beat) { }
+    open spec fn caused_by2(c: ChanId, m: Beat, d1: ChanId, j1: nat, m1: Beat,
+                            d2: ChanId, j2: nat, m2: Beat) -> bool { false }
+    proof fn lemma_caused_by2(c: ChanId, m: Beat, d1: ChanId, j1: nat, m1: Beat,
+                              d2: ChanId, j2: nat, m2: Beat) { }
+
+    open spec fn cause_gives(c: ChanId, m: Beat) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Beat, causes: Set<(ChanId, nat, Beat)>) { }
 
     // No cross-channel property to state over the record.
@@ -73,7 +82,8 @@ impl NetInv<Beat> for HbTok {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Beat)>,
-                                     c: ChanId, i: nat, m: Beat,
+                                     sent: Map<ChanId, Seq<Beat>>,
+                                     c: ChanId, s: Seq<Beat>, m: Beat,
                                      causes: Set<(ChanId, nat, Beat)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) {

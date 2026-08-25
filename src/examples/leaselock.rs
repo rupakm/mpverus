@@ -113,6 +113,20 @@ impl NetInv<Msg> for Lease {
         exists|j: nat| causes.contains((acq_rsp(c.ix[0]), j, Msg::Granted(m->Write_0)))
     }
 
+    /// The same, for one cause: the grant on this writer's own reply channel.
+    open spec fn caused_by1(c: ChanId, m: Msg, d: ChanId, j: nat, m2: Msg) -> bool {
+        d == acq_rsp(c.ix[0]) && m2 == Msg::Granted(m->Write_0)
+    }
+
+    proof fn lemma_caused_by1(c: ChanId, m: Msg, d: ChanId, j: nat, m2: Msg) {
+        assert(set![(d, j, m2)].contains((acq_rsp(c.ix[0]), j, Msg::Granted(m->Write_0))));
+    }
+
+    open spec fn caused_by2(c: ChanId, m: Msg, d1: ChanId, j1: nat, m1: Msg,
+                            d2: ChanId, j2: nat, m2: Msg) -> bool { false }
+    proof fn lemma_caused_by2(c: ChanId, m: Msg, d1: ChanId, j1: nat, m1: Msg,
+                              d2: ChanId, j2: nat, m2: Msg) { }
+
     /// What the storage node gets to conclude: the token in the request was
     /// issued by the server, and so is nonzero. The writer cannot manufacture
     /// this, because `send_caused` demands the witness.
@@ -141,7 +155,8 @@ impl NetInv<Msg> for Lease {
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Msg)>,
-                                     c: ChanId, i: nat, m: Msg,
+                                     sent: Map<ChanId, Seq<Msg>>,
+                                     c: ChanId, s: Seq<Msg>, m: Msg,
                                      causes: Set<(ChanId, nat, Msg)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) {
@@ -385,11 +400,8 @@ impl LockServer {
         &&& self.rsps.len() > 0
         // The reply channels, as one equality between values.
         &&& self.rsps.ids@ =~= Seq::new(self.rsps.len(), |j: int| acq_rsp(j))
-        // The request side is still a quantifier, because `Inbox` does not
-        // carry its channel names the way `FanOut` does. It survives only
-        // because it is stated over `rxs@`, which `recv_any` preserves.
-        &&& forall|k: int| 0 <= k < self.inbox.rxs@.len()
-                ==> (#[trigger] self.inbox.rxs@[k].id()) == acq_req(k)
+        // And the request channels the same way.
+        &&& self.inbox.ids@ =~= Seq::new(self.inbox.len(), |k: int| acq_req(k))
     }
 
     /// This service, seen as the implementation transition system above.
@@ -655,15 +667,7 @@ impl NetHandler<Msg, Lease> for Writer {
                     proof { gw = (self.lease.borrow()).tracked_borrow(); }
                     let t = self.token;
                     let q = self.seq;
-                    proof {
-                        assert(seq![self.id as int][0] == self.id as int);
-                        assert(self.wr.id().ix[0] == self.id as int);
-                        let j0 = gw.element().1;
-                        assert(set![gw.element()].contains(
-                            (acq_rsp(self.id as int), j0, Msg::Granted(t))));
-                        assert(Lease::caused_by(self.wr.id(), Msg::Write(t, q, self.val),
-                                                set![gw.element()]));
-                    }
+                    proof { assert(self.wr.id().ix[0] == self.id as int); }
                     self.wr.send_caused(Msg::Write(t, q, self.val), Tracked(gw));
                     self.phase = WPhase::AwaitingAck;
                 }

@@ -224,14 +224,64 @@ pub trait NetInv<M> : Sized {
     ///
     /// Defaults to false: a protocol that relates messages on a single channel
     /// says nothing and uses `send` throughout.
-    open spec fn needs_cause(c: ChanId, m: M) -> bool { false }
+    /// NO DEFAULT BODY, deliberately. A default here is worse than merely
+    /// unreliable: at a use site the default can be taken instead of the
+    /// implementation, so every conjunct of a protocol's definition proves
+    /// individually while the definition itself does not. That cost an
+    /// afternoon in `paxos.rs`. A protocol with no cross-channel obligations
+    /// writes `false` and is done.
+    spec fn needs_cause(c: ChanId, m: M) -> bool;
 
     /// Are the messages in `causes` acceptable justification for sending `m` on
     /// `c`? Each element is a channel, a position, and the message sent there.
     ///
     /// A set rather than a single message, because a decision may rest on
     /// several: a coordinator committing needs every vote, not one.
-    open spec fn caused_by(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>) -> bool { false }
+    spec fn caused_by(c: ChanId, m: M, causes: Set<(ChanId, nat, M)>) -> bool;
+
+    /// What a SINGLE cause must satisfy, stated per-cause.
+    ///
+    /// `caused_by` takes a set because a quorum may justify a message. That is
+    /// right for the model and wrong for a call site: discharging it for one
+    /// witness meant restating the fact as an existential over a singleton set,
+    /// in the exact syntactic shape the definition happened to use. It came to
+    /// about five lines of scaffolding per send, and roughly half the proof
+    /// burden of a service body.
+    ///
+    /// This is the same obligation with the set removed. A protocol whose
+    /// message needs SEVERAL causes writes `false` here, and its senders use
+    /// `send_general` instead.
+    spec fn caused_by1(c: ChanId, m: M, d: ChanId, j: nat, m2: M) -> bool;
+
+    /// The bridge, proved once per protocol instead of once per send.
+    proof fn lemma_caused_by1(c: ChanId, m: M, d: ChanId, j: nat, m2: M)
+        requires
+            Self::caused_by1(c, m, d, j, m2),
+        ensures
+            Self::caused_by(c, m, set![(d, j, m2)]);
+
+    /// The same for TWO causes, which is the other common shape: a message
+    /// that answers a request AND is recorded in the sender's own log. A
+    /// protocol that never sends such a message writes `false`.
+    ///
+    /// Paxos's `Accepted` is the worked case. The safety proof could reach the
+    /// `Accepted -> Accept` edge the long way round, through the acceptor's log,
+    /// so this arity is a convenience rather than a necessity there. It is kept
+    /// because demanding both causes AT THE SEND is a stronger and more local
+    /// statement than deriving one of them afterwards, and because a protocol
+    /// whose second edge is not derivable would otherwise have to go through
+    /// `send_general` and carry a set.
+    spec fn caused_by2(c: ChanId, m: M,
+                       d1: ChanId, j1: nat, m1: M,
+                       d2: ChanId, j2: nat, m2: M) -> bool;
+
+    proof fn lemma_caused_by2(c: ChanId, m: M,
+                              d1: ChanId, j1: nat, m1: M,
+                              d2: ChanId, j2: nat, m2: M)
+        requires
+            Self::caused_by2(c, m, d1, j1, m1, d2, j2, m2),
+        ensures
+            Self::caused_by(c, m, set![(d1, j1, m1), (d2, j2, m2)]);
 
     /// What a thread may conclude about `m` from the fact that a justification
     /// for it exists. This must mention only `c` and `m`: the justifying
@@ -239,7 +289,7 @@ pub trait NetInv<M> : Sized {
     /// anything said about it directly is lost. The point of this predicate is
     /// to carry the content of that existential across, in a form the reader
     /// can use.
-    open spec fn cause_gives(c: ChanId, m: M) -> bool { true }
+    spec fn cause_gives(c: ChanId, m: M) -> bool;
 
     /// A justification really does establish it. The justifying message is
     /// known to satisfy the protocol's guarantee, because everything ever sent
@@ -292,16 +342,30 @@ pub trait NetInv<M> : Sized {
     /// provable at all.
     proof fn lemma_record_inv_preserved(
         was_sent: Set<(ChanId, nat, M)>,
-        c: ChanId, i: nat, m: M,
+        sent: Map<ChanId, Seq<M>>,
+        c: ChanId, s: Seq<M>, m: M,
         causes: Set<(ChanId, nat, M)>,
     )
         requires
             Self::record_inv(was_sent),
-            Self::wit_inv(c, m),
+            // The gate and the history it read, so a property of the record
+            // may still be established from what the gate checked. Without
+            // this, "no earlier message on this channel had property P" is
+            // unavailable, and that is a thing gates routinely enforce.
+            Self::gate(c, s, m),
+            sent.dom().contains(c), sent[c] == s,
+            // A witness names a real position of a real history, which is what
+            // ties the two domains together.
+            forall|k: ChanId, i2: nat, mm: M| (#[trigger] was_sent.contains((k, i2, mm)))
+                ==> sent.dom().contains(k) && i2 < sent[k].len() && sent[k][i2 as int] == mm,
+            // ... and the converse: every position of every history is recorded.
+            forall|k: ChanId, i2: int|
+                sent.dom().contains(k) && 0 <= i2 < sent[k].len()
+                    ==> was_sent.contains((k, i2 as nat, #[trigger] sent[k][i2])),
             causes.subset_of(was_sent),
             Self::needs_cause(c, m) ==> Self::caused_by(c, m, causes),
         ensures
-            Self::record_inv(was_sent.insert((c, i, m)));
+            Self::record_inv(was_sent.insert((c, s.len(), m)));
 
     /// ... and is preserved by a send the gate admits.
     ///
@@ -429,11 +493,24 @@ tokenized_state_machine!{
                             causes.subset_of(self.was_sent) && Inv::caused_by(c, m, causes)
         }
 
+        /// The record is COMPLETE: every position of every history is in it.
+        ///
+        /// `agree` says a witness names a real position; this says every real
+        /// position has a witness. Both directions are needed to move a fact
+        /// between the two domains, and only one of them was stated until a
+        /// protocol needed the other.
         #[invariant]
-        pub spec fn protocol_extra_w(&self) -> bool { Inv::record_inv(self.was_sent) }
+        pub spec fn complete(&self) -> bool {
+            forall|c: ChanId, i: int|
+                self.sent.dom().contains(c) && 0 <= i < self.sent[c].len()
+                    ==> self.was_sent.contains((c, i as nat, #[trigger] self.sent[c][i]))
+        }
 
         #[invariant]
-        pub spec fn protocol_extra(&self) -> bool { Inv::history_inv(self.sent) }
+        pub spec fn protocol_record_inv(&self) -> bool { Inv::record_inv(self.was_sent) }
+
+        #[invariant]
+        pub spec fn protocol_history_inv(&self) -> bool { Inv::history_inv(self.sent) }
 
         /// Nothing at or above the allocator's counter exists yet. This is what
         /// makes creating a channel sound without anyone seeing the whole
@@ -568,7 +645,7 @@ tokenized_state_machine!{
         ) {
             Inv::lemma_gate_gives_inv(c, s, m);
             Inv::lemma_history_inv_preserved(pre.sent, pre.was_sent, c, s, m, causes);
-            Inv::lemma_record_inv_preserved(pre.was_sent, c, s.len(), m, causes);
+            Inv::lemma_record_inv_preserved(pre.was_sent, pre.sent, c, s, m, causes);
             assert(post.was_sent =~= pre.was_sent.insert((c, s.len(), m)));
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
             assert forall|k: ChanId, i: nat, mm: M| #[trigger] post.was_sent.contains((k, i, mm))
@@ -790,17 +867,40 @@ pub fn recv_any<M, Inv: NetInv<M>>(
         final(map).map()[rxs[res.0 as int].id()]
             == old(map).map()[rxs[res.0 as int].id()].push(res.1),
 {
-    // No select in std, so poll. A real deployment would use a multi-producer
-    // channel or an async runtime; the proof is indifferent to which.
+    // There is no select in std, so this polls. Two things keep that honest.
+    //
+    // The scan starts at a rotating slot, so a peer that always has something
+    // ready cannot starve the ones after it. Without that, "whichever peer
+    // answers first" would really mean "the lowest-numbered ready peer".
+    //
+    // And the wait backs off. A bare `yield_now` loop polls tens of thousands
+    // of times per millisecond of waiting and buys no latency at all: it just
+    // holds a core. After a short spin -- which is what a reply already in
+    // flight needs -- it sleeps instead, which costs at most the sleep quantum
+    // and nothing else.
+    //
+    // A deployment that cares would use a multi-producer channel carrying the
+    // source index, or an async runtime. The proof is indifferent to which:
+    // the model keeps one history per channel whatever the transport does.
+    let n = rxs.len();
+    let mut start: usize = 0;
+    let mut spins: u32 = 0;
     loop {
-        let mut k: usize = 0;
-        while k < rxs.len() {
+        let mut i: usize = 0;
+        while i < n {
+            let k = if start + i < n { start + i } else { start + i - n };
             match rxs[k].inner.try_recv() {
                 Ok(m) => { return (k, m, Tracked::assume_new()); }
-                Err(_) => { k = k + 1; }
+                Err(_) => { i = i + 1; }
             }
         }
-        std::thread::yield_now();
+        start = if start + 1 < n { start + 1 } else { 0 };
+        if spins < 128 {
+            spins = spins + 1;
+            std::thread::yield_now();
+        } else {
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
     }
 }
 

@@ -40,3 +40,6 @@ docs/*.synctex.gz
 docs/*.bak
 docs/*.back
 mpverus
+
+# Produced by the rust-analyzer cargo shim; pins path deps inside /tools/.
+/Cargo.lock

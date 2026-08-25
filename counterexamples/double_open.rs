@@ -28,6 +28,14 @@ impl NetInv<u64> for Triv {
     open spec fn deliverable_at(v: Seq<u64>, i: nat) -> bool { fifo_deliverable(v, i) }
     open spec fn history_inv(sent: Map<ChanId, Seq<u64>>) -> bool { true }
     open spec fn needs_cause(c: ChanId, m: u64) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: u64, causes: Set<(ChanId, nat, u64)>) -> bool { false }
+    open spec fn caused_by1(c: ChanId, m: u64, d: ChanId, j: nat, m2: u64) -> bool { false }
+    proof fn lemma_caused_by1(c: ChanId, m: u64, d: ChanId, j: nat, m2: u64) { }
+    open spec fn caused_by2(c: ChanId, m: u64, d1: ChanId, j1: nat, m1: u64,
+                            d2: ChanId, j2: nat, m2: u64) -> bool { false }
+    proof fn lemma_caused_by2(c: ChanId, m: u64, d1: ChanId, j1: nat, m1: u64,
+                              d2: ChanId, j2: nat, m2: u64) { }
+    open spec fn cause_gives(c: ChanId, m: u64) -> bool { true }
     open spec fn pair_gives(c: ChanId, m1: u64, m2: u64) -> bool { true }
     proof fn lemma_pair_gives(sent: Map<ChanId, Seq<u64>>, c: ChanId,
                                 i: nat, j: nat, m1: u64, m2: u64) { }
@@ -36,7 +44,8 @@ impl NetInv<u64> for Triv {
     open spec fn record_inv(was_sent: Set<(ChanId, nat, u64)>) -> bool { true }
     proof fn lemma_record_inv_init() { }
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, u64)>,
-                                     c: ChanId, i: nat, m: u64,
+                                     sent: Map<ChanId, Seq<u64>>,
+                                     c: ChanId, s: Seq<u64>, m: u64,
                                      causes: Set<(ChanId, nat, u64)>) { }
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
     proof fn lemma_history_inv_alloc(sent: Map<ChanId, Seq<u64>>, c: ChanId) { }

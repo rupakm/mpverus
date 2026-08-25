@@ -67,7 +67,7 @@ tokenized_state_machine!{
 
         /// The protocol's guarantee, applied through the type parameter.
         #[invariant]
-        pub spec fn protocol_extra(&self) -> bool { Inv::history_inv(self.sent) }
+        pub spec fn protocol_history_inv(&self) -> bool { Inv::history_inv(self.sent) }
 
         #[invariant]
         pub spec fn protocol_inv(&self) -> bool {

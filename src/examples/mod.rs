@@ -35,3 +35,4 @@ pub mod layers_demo;
 pub mod system;
 pub mod lease_system;
 pub mod paxos;
+pub mod paxos_system;

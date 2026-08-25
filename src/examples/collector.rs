@@ -84,13 +84,23 @@ impl NetInv<Item> for CollTok {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<Item>, m: Item) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: Item) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) -> bool { false }
+    open spec fn caused_by1(c: ChanId, m: Item, d: ChanId, j: nat, m2: Item) -> bool { false }
+    proof fn lemma_caused_by1(c: ChanId, m: Item, d: ChanId, j: nat, m2: Item) { }
+    open spec fn caused_by2(c: ChanId, m: Item, d1: ChanId, j1: nat, m1: Item,
+                            d2: ChanId, j2: nat, m2: Item) -> bool { false }
+    proof fn lemma_caused_by2(c: ChanId, m: Item, d1: ChanId, j1: nat, m1: Item,
+                              d2: ChanId, j2: nat, m2: Item) { }
+
+    open spec fn cause_gives(c: ChanId, m: Item) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: Item, causes: Set<(ChanId, nat, Item)>) { }
     // No cross-channel property to state over the record.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, Item)>) -> bool { true }
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, Item)>,
-                                     c: ChanId, i: nat, m: Item,
+                                     sent: Map<ChanId, Seq<Item>>,
+                                     c: ChanId, s: Seq<Item>, m: Item,
                                      causes: Set<(ChanId, nat, Item)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }
@@ -151,10 +161,7 @@ impl Consumer {
     pub open spec fn inv(&self) -> bool {
         &&& self.hub.wf()
         &&& self.hub.len() == n_producers()
-        // Stated over the receiver vector, so it survives a call that changes
-        // only the consumption records.
-        &&& forall|j: int| 0 <= j < n_producers()
-                ==> (#[trigger] self.hub.rxs@[j].id()) == hub_from(j)
+        &&& self.hub.ids@ =~= Seq::new(n_producers() as nat, |j: int| hub_from(j))
     }
 
     pub fn collect_one(&mut self) -> (item: Item)
@@ -165,8 +172,7 @@ impl Consumer {
         // Interference point: producers are emitting while we are blocked.
         let (which, item) = self.hub.recv_any();
         proof {
-            let c = self.hub.rxs@[which as int].id();
-            assert(c == hub_from(which as int));
+            let c = self.hub.id(which as int);
             assert(is_hub(c)) by {
                 assert(0 <= (which as int) < n_producers()
                        && c == hub_from(which as int));

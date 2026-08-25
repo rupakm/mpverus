@@ -22,8 +22,9 @@ Reading order:
    refinement stack.
 5. `docs/movers.pdf` for the ideas, `docs/plan.md` for what is open.
 
-Current state: 196 verified, 0 errors, no `assume` or `admit`, nine behavioural
-`external_body` declarations.
+Current state: 267 verified, 0 errors, no `assume` or `admit`, twelve
+behavioural `external_body` declarations: the five trusted primitives, a clock
+read, and six deployment configuration axioms.
 
 ## Working method
 
@@ -169,8 +170,10 @@ Four rules, all learned by hitting them:
 - **The channel map is one value, not a quantified relation.** `spec fn
   chans(&self) -> Seq<ChanId>`, not `spec fn chan(&self, k: int)`. A `forall`
   recorded before a call is about a receiver that afterwards has no name; a
-  single equality chains. Same rule as the vectors below — capture both sides
-  as ghost DATA and the relation between two immutable values survives.
+  single equality chains. This is why `Inbox`, `FanOut` and `FanIn` all carry
+  `ids: Ghost<Seq<ChanId>>`: the names are immutable ghost data, so `Driven`'s
+  invariant is `inbox.ids@ == h.chans()` and nothing has to be re-established
+  after a receive.
 - **`handle` must bound `from`.** Without `0 <= from < chans().len()` the
   channel lookup is unspecified and the guarantee attached to it says nothing.
 - **A handler cannot branch on which channel a message came from.** The fact is
@@ -401,6 +404,50 @@ equality** -- `c == p2b(c.ix[0], c.ix[1])` -- not by picking the name apart
 `wit_inv` cannot be instantiated at it, and the guarantee attached to the
 channel is unavailable. This cost a round trip.
 
+## Justifying a send
+
+`caused_by` takes a SET of causes, because a quorum may justify a message. That
+is right for the model and wrong for a call site. Discharging it for one witness
+meant restating the fact as an existential over a singleton set, in the exact
+syntactic shape the definition happened to use -- about five lines per send, and
+roughly half the proof burden of a service body.
+
+So there are three forms, and a protocol implements the ones it needs:
+
+    caused_by1(c, m, d, j, m2)                     one cause
+    caused_by2(c, m, d1, j1, m1, d2, j2, m2)       two causes
+    caused_by(c, m, causes)                        a set -- a quorum
+
+with `lemma_caused_by1` and `lemma_caused_by2` bridging to the set form, proved
+ONCE per protocol rather than once per send. Use the matching sender:
+
+    out.send_caused(m, w)             needs caused_by1
+    out.send_caused2(m, w1, w2)       needs caused_by2
+    out.send_general(m, &set_token)   needs caused_by
+
+A protocol whose messages never need two causes writes `caused_by2 = false` and
+an empty lemma. Measured on the Paxos acceptor, this took the two handlers from
+84 and 102 lines to 52 and 62, with the cause ceremony going from 14 and 18
+lines to **zero**.
+
+Reach for `send_general` only for a genuine quorum. If you find yourself
+building a `SetToken` by hand for a fixed, small number of witnesses, you want
+`send_caused2`.
+
+**Trait members involved in causes have no default bodies, deliberately.**
+`needs_cause`, `caused_by`, `caused_by1`, `caused_by2` and `cause_gives` are all
+required. A default here is worse than merely unreliable: at a use site the
+default can be taken instead of the implementation, and the symptom is
+memorable -- every conjunct of the definition proves individually while the
+definition itself does not. If you ever see that, this is why.
+
+**If you must discharge the set form by hand**, two rules, both about matching
+the definition's syntactic shape rather than its meaning. State the existential
+with the definition's projections (`mm->Promise_0`), not the constructor
+arguments you built the message from. And bind the tuple you are claiming
+membership for to a name first, assert `contains` of that name, then assert the
+existential.
+
 ## Some properties are types, not proofs
 
 Not every obligation is a verification condition. Opening one channel twice is
@@ -562,7 +609,8 @@ No combinator ties a running function to a declared abstract action in general.
 `LockLo`, and `server_step_lifts` carries it up — but that is a postcondition
 written for one activity, not a general mechanism, and `Layered`/`BottomLayer`
 derive a stack's bottom from the protocol without connecting it to any code.
-`docs/plan.md`, Phase 3, has the candidate approaches.
+`docs/plan.md`, Phase 3, has the design: abstract actions attributed to
+machine transitions rather than to function bodies.
 
 Also open: protocol state that must be *related* to network state has to live in
 one machine, and `NetSM`'s fields are fixed. That is what blocks global

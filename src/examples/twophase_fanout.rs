@@ -100,13 +100,23 @@ impl NetInv<FMsg> for TpcfTok {
     proof fn lemma_gate_gives_inv(c: ChanId, s: Seq<FMsg>, m: FMsg) { }
     // No cross-channel obligations: every guarantee here is about one channel.
     open spec fn needs_cause(c: ChanId, m: FMsg) -> bool { false }
+    open spec fn caused_by(c: ChanId, m: FMsg, causes: Set<(ChanId, nat, FMsg)>) -> bool { false }
+    open spec fn caused_by1(c: ChanId, m: FMsg, d: ChanId, j: nat, m2: FMsg) -> bool { false }
+    proof fn lemma_caused_by1(c: ChanId, m: FMsg, d: ChanId, j: nat, m2: FMsg) { }
+    open spec fn caused_by2(c: ChanId, m: FMsg, d1: ChanId, j1: nat, m1: FMsg,
+                            d2: ChanId, j2: nat, m2: FMsg) -> bool { false }
+    proof fn lemma_caused_by2(c: ChanId, m: FMsg, d1: ChanId, j1: nat, m1: FMsg,
+                              d2: ChanId, j2: nat, m2: FMsg) { }
+
+    open spec fn cause_gives(c: ChanId, m: FMsg) -> bool { true }
     proof fn lemma_cause_gives(c: ChanId, m: FMsg, causes: Set<(ChanId, nat, FMsg)>) { }
     // No cross-channel property to state over the record.
     open spec fn record_inv(was_sent: Set<(ChanId, nat, FMsg)>) -> bool { true }
     proof fn lemma_record_inv_init() { }
 
     proof fn lemma_record_inv_preserved(was_sent: Set<(ChanId, nat, FMsg)>,
-                                     c: ChanId, i: nat, m: FMsg,
+                                     sent: Map<ChanId, Seq<FMsg>>,
+                                     c: ChanId, s: Seq<FMsg>, m: FMsg,
                                      causes: Set<(ChanId, nat, FMsg)>) { }
 
     proof fn lemma_history_inv_init(chans: Set<ChanId>) { }

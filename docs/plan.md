@@ -682,17 +682,14 @@ needs the endpoint construction and token division in loops, which is
 mechanical. And `deployment_size` is a new assumption --- an honest one, being a
 fact about a deployment rather than about the protocol.
 
-### Phase 3 — Connecting code to actions — **OPEN, and the main gap**
+### Phase 3 — Connecting code to actions — **OPEN, designed, not started**
 
 Originally stated as "attribute every network operation to a declared action".
 Half of that is now enforced by construction rather than checked: a thread can
 touch only channels whose tokens it holds, and every send goes through the
-machine's own transition with its gate. What remains is the other half, and it
-is a real gap.
+machine's own transition with its gate. What remains is the other half.
 
-Nothing currently states that *a particular Rust function body performs one step
-of a declared abstract action*. Before the move to tokens, `cr_step` carried a
-postcondition of the form
+Before the move to tokens, `cr_step` carried a postcondition of the form
 
 ```rust
 exists|n_pre| Cr::inv(n_pre) && Cr::gate(a, req, n_pre)
@@ -705,31 +702,175 @@ port because it needs the global state that the token representation
 deliberately hides: a thread holds tokens for its own channels and cannot speak
 about the machine's whole state.
 
-`Layered` / `BottomLayer` did the *specification* half of the reconnection — the
-bottom of a refinement stack is now derived from the protocol rather than
-restated. What is missing is the *code* half: a combinator, along the lines of
+**The gap is narrower than it looks.** `leaselock.rs:434` already carries the
+statement by hand:
 
 ```rust
-atomic::<T>(a, req, tokens, |tokens| { ... })
+exists|a: LockAct| LockLo::step(a, Msg::Acquire, h1.last(),
+                                old(self).st(), final(self).st())
 ```
 
-whose postcondition is "this body performed `BottomLayer::<T>::step(a, ...)`".
-Without it, a refinement chain proves things about the protocol's transition
-system but nothing ties a running function to it, so Phases 5 and 6 would
-connect a Leslie model to a specification rather than to code.
+That works because `LockServer::st()` is a function of THAT SERVICE'S OWN
+fields. So the missing piece splits in two. Where the abstract state belongs to
+one participant, this is already possible and needs only a reusable combinator.
+Where the abstract state spans participants -- which is what a TLA or Leslie
+model of Paxos is, one global state machine -- it is blocked, and that is what
+the design below is for.
 
-Two possible approaches:
+#### Two decisions
 
-- Have the trusted primitives accumulate a ghost record of the operations a
-  thread performed since its last interference point, and have the combinator
-  check that record against the declared action. Costs a ghost field on every
-  token operation.
-- Express the step over the *tokens the thread holds* rather than over the whole
-  state, which is closer to how `BottomLayer` already works, and requires
-  `Spec::S` to be instantiable at a partial state.
+**Attribute abstract actions to transitions, not to functions.** The function
+that appears to perform an abstract action is often not where the abstract state
+moves. In Paxos, `commit()` sends a `Decided` and one `Accept` per acceptor, but
+nothing is CHOSEN until some acceptor's `Accepted` completes a quorum, in a
+different participant's code. Attributing actions to function bodies would force
+an atomicity argument this development does not have; attributing them to
+transitions needs none. This is also why the `atomic::<T>(a, req, tokens, |..|)`
+combinator sketched in earlier drafts of this plan is not the shape to build.
 
-The second looks more in keeping with the rest of the design and has not been
-tried.
+**The abstract state must be a function of monotone or owned state, never of
+unowned mutable state.** That is the field discipline of §"Protocol state in the
+network machine" applied to the refinement mapping, and it is what makes the
+mapping stable under interference without an atomicity argument.
+
+#### T1 -- abstract state over `was_sent`
+
+A trait alongside `NetInv`, hooking into the same place:
+
+```rust
+pub trait NetAbs<M, Inv: NetInv<M>> : Sized {
+    type S;   // abstract state
+    type A;   // abstract action
+
+    /// The refinement mapping. A function of the RECORD only, so it is
+    /// monotone-derived and cannot be invalidated by another thread.
+    spec fn abs(was_sent: Set<(ChanId, nat, M)>) -> Self::S;
+
+    /// Which abstract action this send realises. `None` is a stuttering step.
+    spec fn act_of(was_sent: Set<(ChanId, nat, M)>, c: ChanId, i: nat, m: M)
+        -> Option<Self::A>;
+
+    spec fn hi_gate(a: Self::A, s: Self::S) -> bool;
+    spec fn hi_step(a: Self::A, s: Self::S, s2: Self::S) -> bool;
+
+    /// The whole obligation, one per protocol. Same arguments and same shape as
+    /// `lemma_record_inv_preserved`, so it drops into the existing hook.
+    proof fn lemma_send_refines(
+        was_sent: Set<(ChanId, nat, M)>, sent: Map<ChanId, Seq<M>>,
+        c: ChanId, s: Seq<M>, m: M, causes: Set<(ChanId, nat, M)>)
+        requires
+            Inv::record_inv(was_sent), Inv::gate(c, s, m),
+            causes.subset_of(was_sent),
+            Inv::needs_cause(c, m) ==> Inv::caused_by(c, m, causes),
+        ensures ({
+            let post = was_sent.insert((c, s.len(), m));
+            match Self::act_of(was_sent, c, s.len(), m) {
+                Some(a) => Self::hi_gate(a, Self::abs(was_sent))
+                        && Self::hi_step(a, Self::abs(was_sent), Self::abs(post)),
+                None    => Self::abs(post) == Self::abs(was_sent),
+            }
+        });
+}
+```
+
+Defining `abs` over the record buys two things at no cost. `do_recv` and `alloc`
+do not touch `was_sent`, so they stutter without proof; and `abs` is
+monotone-derived, so it inherits the stability property the development already
+rests on.
+
+**What T1 gives.** System-level trace refinement: every reachable machine
+state's abstraction is reachable in the model. Plus per-function contracts of
+one particular kind -- a thread holding a witness knows `was_sent` contains it,
+so it knows any UPWARD-CLOSED predicate of `abs` that the witness forces:
+
+```rust
+fn commit(&mut self, ...) ensures decided(abs(..), b, v)
+```
+
+That is the replacement for "this fragment is atomic action A": *this fragment
+established a monotone abstract fact*. For a model whose actions only ever grow
+the abstract state -- Paxos: ballots promised, values chosen -- it is the same
+strength.
+
+**What T1 does not give, correctly.** Contracts of the form `abs(post) ==
+f(abs(pre))`. Another thread may have moved `abs` concurrently, so no thread can
+claim an exact transition of the global state.
+
+#### T2 -- abstract state over per-participant owned state
+
+Needed when the abstract state is not monotone: a mutable register, a leader
+that changes, a counter that decrements. **This is not a new mechanism. It is
+the `pstate` field of §"Protocol state in the network machine"**, and the
+relation between the two is worth stating precisely, because refinement needs
+strictly less than the safety motivation recorded there.
+
+That section has two fields doing two jobs:
+
+- `pstate` (`map`-sharded, owned per participant) lets a gate read a
+  participant's own state. This is what T2 needs: somewhere for non-monotone
+  abstract state to live that is still stable, because single ownership makes
+  reading it safe.
+- `pfacts` (`persistent_set`, monotone exports) lets a participant PUBLISH a
+  fact so that other participants' RUNNING CODE may consume it as evidence.
+  Step 3 there generalises evidence to `Ev<M, F>` so `send_general` and
+  `learn_cause` carry facts as well as messages.
+
+**A refinement mapping never needs `pfacts`.** `abs` is a spec function over the
+whole machine state and may read every participant's share directly; spec code
+has no ownership discipline. Only running code needs facts delivered to it.
+
+So **T2 is step 1 of that section's five, and stops there**: add `pstate`,
+`pinit`, `pstep`, `do_pstep`, defaulted to a unit type so no existing protocol
+changes. Steps 2 and 3 -- `pfacts` and the `Ev` generalisation, the latter of
+which "touches every use of provenance" -- are needed for the safety motivation
+and not for refinement.
+
+**What T2 does add.** Today `do_send` is the only transition that moves the
+record, so `lemma_send_refines` is a single obligation. With `pstate`,
+`do_pstep` moves the abstract state without sending anything, so the obligation
+becomes one case per transition. That is new work the safety-motivated plan does
+not incur.
+
+**Why Paxos needed neither.** The single-owned-log pattern is a hand-rolled
+substitute for `pstate`: routing an acceptor's state through `alog` puts it in
+`was_sent`, which is monotone and global. Same expressiveness, at the cost of a
+message per state change and of reasoning about the state's history rather than
+its current value.
+
+#### T3 -- global mutable state with no owner
+
+Not supported, and should not be. It violates the field discipline, and any
+thread's claim about it is falsifiable by any other thread. The way to have it
+is to give it an owner -- a lock service -- which reduces it to T2.
+
+#### Order
+
+1. **T1 on `leaselock`.** It already has `LockLo`/`LockHi` and the hand-written
+   per-function version, so it is the cheapest check that `act_of` plus
+   `lemma_send_refines` reproduces something known to work.
+2. **T1 on Paxos** against a single-decree model. The real test. The interesting
+   part is that `act_of` attributes Phase2b to the acceptor's `Accepted` send
+   rather than to the proposer's `commit` -- the linearization point is not in
+   the code that appears to perform the action.
+3. **T2 only when a protocol demands it.** Chandy--Lamport probably does: a
+   snapshot's abstract state includes each process's recorded local state.
+
+#### Risks
+
+**`act_of` taking `was_sent` reintroduces what this is meant to escape.**
+History-dependent attribution is necessary -- the quorum-completing send is the
+one that acts -- but it makes `lemma_send_refines` another statement about a
+large set, which is the 215-line-inductive-step style of
+`lemma_record_inv_preserved`. Mitigation: attribute by message shape wherever
+possible and fall back to history only for the quorum-completing case. If that
+does not hold, T1 buys less than it appears to.
+
+**The composition step is prose, not machine-checked.** Per-transition
+refinement gives trace refinement by an induction over the machine's transitions
+that Verus's invariant mechanism cannot express, since state invariants cannot
+relate consecutive states. It would sit at the same level as the TSM
+meta-theory the development already assumes, and belongs in `movers.tex` §14
+next to that assumption rather than left implicit.
 
 ### Phase 4 — Ergonomics — **DONE**
 
@@ -864,7 +1005,8 @@ it, so `publish` does not disturb the owner. 5 verified, 0 errors.
 
 1. Add `pstate`, `pinit`, `pstep`, `do_pstep`, with all three defaulting to a
    unit type so no existing protocol changes. Check the nine protocols still
-   verify untouched.
+   verify untouched. **This step alone is what Phase 3's T2 needs**; a
+   refinement mapping reads `pstate` in spec and never needs steps 2 and 3.
 2. Add `pfacts`, `pfact_ok`, `publish`, and `fact_inv` (what a fact witness
    guarantees), with the invariant that every published fact was licensed by
    its owner's state.
@@ -1194,8 +1336,10 @@ exit.** `Writer::write_once` contains two blocking receives and nothing requires
 nothing checks, and which the planned `pstate`/`pfacts` work could break
 silently by introducing a field that is neither owned nor monotone.
 
-**Phase 3 remains open**: nothing states that a body performs one step of a
-declared action.
+**Phase 3 remains open**: no general mechanism states that a body performs one
+step of a declared action. (`LockServer::serve_one` does it by hand for an
+abstract state belonging to one participant; the design for the general case,
+including the multi-participant one, is under Phase 3 above.)
 
 **Proposal: make the shape structural rather than documented.** Move blocking
 out of activities and into the driver:
@@ -1440,13 +1584,25 @@ them as the demonstration of the technique.
 
 ---
 
-# A ladder of protocols towards Paxos
+# A ladder of protocols towards Paxos — **SUPERSEDED; Paxos landed directly**
 
 The goal is single-decree Paxos written against these abstractions, with the
 rough edges it exposes treated as the point rather than as an inconvenience.
 Going straight there would conflate several unknowns, so this is a ladder: each
 rung is a small protocol that stresses exactly one thing Paxos needs, and each
 is expected to produce one concrete framework change.
+
+**What actually happened.** Rung 5 was attempted directly and it worked.
+`lemma_agreement` is proved, the acceptor and the proposer are running code, and
+`deploy_paxos` stands up three acceptors and a proposer and drives rounds. So
+the ladder's purpose — reducing risk before the expensive attempt — has been
+served by other means, and rungs 1 to 4 are no longer on the critical path.
+They remain reasonable protocols to have for their own sake, particularly
+reliable broadcast, which is the only one that would exercise set-valued
+`caused_by` outside Paxos.
+
+All four gaps below are closed. What each cost is recorded with it, because two
+of the four predictions were wrong and that is worth keeping.
 
 ## What Paxos needs, and what is already there
 
@@ -1459,13 +1615,18 @@ Already available, and not the interesting part:
 - Set-valued provenance: `caused_by` already takes a set of causes, so a message
   justified by a quorum is expressible.
 
-Not available. Each of these is a rung below.
+Not available WHEN THIS WAS WRITTEN. All three landed with Paxos; kept here as
+a record of what the ladder was for.
 
 - **Quorum gathering.** Collecting replies in arrival order while accumulating
   the set of who has replied, and building a `SetToken` from the witnesses.
-- **Quorum intersection.** Two majorities of a finite set share a member.
-- **A cross-participant invariant preserved at a caused send.** This is the one
-  that will hurt; see the gap below.
+  Now `Inbox::collect` in `src/proc.rs`, which also returns the position of
+  every witness it keeps.
+- **Quorum intersection.** Two majorities of a finite set share a member. Now
+  `lemma_quorums_intersect` in `src/quorum.rs`, instantiated for the protocol
+  as `lemma_quorum_intersect` in `src/examples/paxos.rs`.
+- **A cross-participant invariant preserved at a caused send.** This was the
+  one expected to hurt, and it did; see G1 below.
 
 ## Confirmed gaps
 
@@ -1481,33 +1642,64 @@ quorum of promises it holds witnesses for. Those witnesses are not available
 here. The fix is to pass the causes and their guarantees into this lemma, which
 means splitting it or widening it. Predicted to bite at rung 3.
 
+**RESOLVED.** The lemma now takes `was_sent` and the `causes` set, which is the
+"widening" option above. `Paxos::record_inv` is the cross-participant invariant
+and `lemma_record_inv_preserved` maintains it at each send with the causes in
+hand. It did bite, and the widening was the fix.
+
 **G2 — the finite-set lemmas for quorums are not in vstd.** `lemma_len_union`
 and `lemma_len_intersect` are inequalities; the disjoint-union *equality* that
 intersection needs is absent. `spike/quorum.rs` proves it by induction and then
 derives quorum intersection: 3 verified, 0 errors. Roughly 30 lines, and it
 should move into the library.
 
+**RESOLVED, and the premise was wrong.** Quorum intersection moved into
+`src/quorum.rs`. But vstd DOES have the disjoint-union equality --
+`lemma_set_disjoint_lens`, `set_lib.rs:1220` -- so the hand-rolled induction was
+30 lines re-proving a library lemma, and was deleted in the simplification pass.
+Only `lemma_quorums_intersect` remains, and every `Set::finite()` side condition
+went with it, since sets are finite by construction in this vstd.
+
 **G3 — `Inbox` does not carry its channel names.** `FanOut`/`FanIn` do, which is
 what removed the per-slot quantifier friction. Every quorum protocol will hit
 the same friction on the receive side. Small and mechanical.
+
+**RESOLVED.** `Inbox` has `ids: Ghost<Seq<ChanId>>`. It removed the quantifier
+from four service invariants and the ghost-capture idiom from `Driven::step`.
 
 **G4 — building a `SetToken` inside a loop is untested.** `SetToken::empty` and
 `insert` exist, but accumulating one while relating it to a growing ghost set of
 acceptors has never been done here.
 
+**RESOLVED, then superseded.** It worked -- the proposer's first `gather_one`
+did exactly this -- and was then absorbed into `Inbox::collect`, so no protocol
+has to write the loop. The ghost set of acceptors is now `to_set` of the
+sources collect returns.
+
 ## The rungs
 
+Kept as written, with what happened to each.
+
 **0. `Inbox` gets `ids`.** Enabling, small, uniform with `FanOut`/`FanIn`.
+**DONE**, though not as a precondition for anything — it came out of the
+simplification review afterwards, and removed four hand-written quantifiers
+rather than the one this predicted.
 
 **1. Quorum acknowledgement.** Broadcast to n, proceed when a majority acks.
 No safety property beyond "a majority really acked, and each ack is vouched
 for". Stresses G3 and G4 and produces a `Quorum` helper: the accumulated
 witnesses plus the ghost set of who they came from.
 
+**NOT DONE, and no longer needed.** `Inbox::collect` does what the `Quorum`
+helper was meant to produce, and it was written directly for Paxos.
+
 **2. Reliable broadcast.** Deliver a message only when a quorum has echoed it.
 First real use of set-valued `caused_by` and `send_general`: the delivery is
 justified by the quorum of echoes. Stresses `cause_gives` when the cause is a
 set rather than one message.
+
+**NOT DONE.** The one rung still worth building for its own sake: it is the
+only protocol here that would exercise set-valued `caused_by` outside Paxos.
 
 **3. Quorum-replicated fencing register.** The lease lock's storage node,
 replicated across n nodes, with a write accepted when a majority accepts it.
@@ -1515,13 +1707,22 @@ First use of quorum intersection: two writers each hold a majority, so some node
 saw both, which orders them. First cross-participant safety argument, and the
 rung where G1 is expected to bite.
 
+**NOT DONE, and its prediction was tested another way.** G1 did bite, in
+Paxos rather than here.
+
 **4. Synod without phase 1, then with it.** A proposer picks a ballot and sends
 `Accept` to all; a value is chosen when a majority accepts. With one proposer
 this is trivially safe. With two it is not, and the failure is the reason phase
 1 exists. Writing the invariant, watching it fail, then adding phase 1 is the
 cheapest way to get the invariant right before the full protocol.
 
+**NOT DONE.** Paxos was written with phase 1 from the start; the invariant
+was got right by proving `lemma_safe_at` rather than by watching a weaker
+version fail.
+
 **5. Single-decree Paxos.** Then, if it goes well, multi-decree.
+**DONE**, single-decree. Multi-decree is still open, and is the first thing
+that would test whether the one-invariant-over-`was_sent` style scales.
 
 ## Deliberately not on this path
 
@@ -1538,3 +1739,53 @@ On reflection it is not, for the concrete proof: gathering in arrival order with
 a loop invariant over a growing set of repliers is an ordinary loop invariant.
 It would be needed to state the gathering as ONE abstract action, which is a
 Phase 3 concern. Rung 1 will settle whether that reading is right.
+
+## Carried forward from the simplification review
+
+Two findings were confirmed but not applied, because both are design changes
+rather than cleanups.
+
+**The acceptor is a `NetHandler`.** Done. It has no inbound endpoints of its
+own: every `Prepare` and `Accept` channel is a slot of the mailbox its `Driven`
+owns, and `handle` branches on the slot. That removed both pinnings at once --
+it no longer blocks on a named proposer, and the two phases are no longer
+ordered -- because both came from `FanIn::recv(k)` naming a slot where
+`recv_any` does not. `deploy_paxos_two` is the demonstration: three acceptors
+that each know two proposers, where proposer 0 never starts, so slot 0 of every
+mailbox stays silent for the whole run and proposer 1 completes a round anyway.
+
+What remains pinned is the roster: the mailbox has a fixed number of slots, so
+the set of proposers is known when the deployment is built. Taking connections
+from a set that changes needs endpoints that can travel over channels, which is
+a separate item.
+
+Two proposers running CONCURRENTLY is a liveness question and is deliberately
+not demonstrated: duelling proposers can raise ballots past each other forever
+and neither gathers a quorum, so a demo that must terminate cannot have both
+live. Safety is unaffected -- `lemma_agreement` quantifies over all ballots and
+all proposers.
+
+**`caused_by2` stays.** The simplification review established that Paxos does
+not strictly need it -- the `Accepted -> Accept` edge follows from
+`rec_accepted_logged` and `rec_laccept_backed` -- and removing it took about
+ninety lines out of the framework and eight stubs out of the other protocols.
+It was reinstated deliberately: demanding both causes at the send is a stronger
+and more local statement than deriving one afterwards, and a protocol whose
+second edge is NOT derivable would otherwise have to reach for `send_general`
+and carry a set for a fixed pair.
+
+**A macro for the constant part of a `NetInv` impl.** Six of the eight protocols
+have all eleven required lemmas empty and the same nine spec bodies -- about
+thirty lines a protocol author copies before writing any protocol. Trait
+defaults are the wrong mechanism (a default spec body can be taken at a use site
+instead of the impl's, which is what cost an afternoon in `paxos.rs`), so this
+would have to be `macro_rules!`. It does not currently work: `verus!` leaves a
+macro invocation for rustc to expand afterwards, so a macro producing `open spec
+fn` items does not parse; wrapping the expansion in a nested `verus!` inside the
+impl block parses but erases the spec functions' parameters, so the generated
+signatures no longer match the trait. Worth revisiting when Verus supports
+item-level macros inside `verus!`.
+
+**`system.rs` builds its fans in a loop** and pays about fifty lines of
+bookkeeping that `FanOut::add` and `FanIn::add` now absorb. Untouched because it
+is outside the branch.
