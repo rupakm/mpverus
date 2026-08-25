@@ -1893,19 +1893,33 @@ change. Paxos uses this throughout. Where it is too expensive, that is what
 
 ## Ready with what we have
 
-**Reliable broadcast (echo-based, crash-tolerant).** Deliver a value only once a
-quorum has echoed it. Safety: two correct participants never deliver different
+**Reliable broadcast (echo-based, crash-tolerant).** **DONE** --
+`src/examples/rbc.rs`, agreement proved, `Node` is running code, and neither
+`Inbox::collect` nor set-valued `caused_by` needed a framework change to work
+outside Paxos. Deliver a value only once a quorum has echoed it. Safety: two correct participants never deliver different
 values for the same (sender, sequence), by quorum intersection. Stresses
 set-valued `caused_by` and `cause_gives` with a set of causes — the only
 protocol besides Paxos that would, and Paxos exercises it at exactly one send.
 Small. This is the ladder's rung 2, never built.
 
-**ABD single-writer multi-reader atomic register.** The writer tags values with
-(sequence, id) and writes to a majority; a reader reads a majority, takes the
-highest tag, and WRITES BACK before returning. Safety: regularity, then
-atomicity. Stresses quorum intersection twice, and the write-back phase, which
-has no analogue in Paxos. Each replica's (tag, value) goes through an owned log.
-The canonical quorum protocol below Paxos, and small.
+**ABD single-writer multi-reader atomic register.** **PARTLY DONE, AND THE
+ASSESSMENT ABOVE WAS WRONG** -- `src/examples/abd.rs`. Integrity is proved:
+every value a reader can return was really written under that tag, and the tag
+determines the value. That is four provenance links ending at the writer's log,
+and it was as easy here as anywhere.
+
+ATOMICITY IS NOT, and it does not stress quorum intersection twice as claimed,
+because the step that would need it is out of reach. The argument runs: a write
+completed means a quorum acknowledged it; a read gathered from a quorum; the
+quorums intersect at replica `r`; therefore `r` had stored the tag before it
+answered the read. The last step is where it stops -- both events are entries in
+`r`'s OWN log and so are comparable, but which came first depends on when the
+read happened relative to the write, and no message record says it.
+
+Reached the "no global order" limit from an unexpected direction: not ordering
+two participants' events, but ordering one participant's log against another
+participant's progress. `pstate` does not settle it, because the missing fact is
+not anyone's current state.
 
 **Chain replication (fixed chain).** Replicas in a line; updates flow head to
 tail, reads at the tail. Safety: the tail's history is a prefix of the head's.
@@ -1951,8 +1965,11 @@ it would sharpen exactly where the line falls.
 
 ## Out of reach, and what each would need
 
-**Chandy--Lamport snapshots, causal broadcast, vector clocks, timestamp-based
-total order.** All need happens-before across channels. `pstate` plus a
+**ABD atomicity, Chandy--Lamport snapshots, causal broadcast, vector clocks,
+timestamp-based total order.** All need happens-before across channels. ABD
+moves this from a speculative gap to one that stopped a protocol actually
+built, which makes happens-before competitive with `pstate` for the next
+construct to attempt. `pstate` plus a
 published logical clock is the route; see §"Protocol state in the network
 machine", whose third motivating bullet is this.
 
@@ -1968,10 +1985,10 @@ progress, a Paxos round completes under a stable leader.
 
 ## Recommended order
 
-1. **Reliable broadcast**, then **ABD**. Both small, and between them they
-   exercise set-valued causes and the read-back pattern, neither of which the
-   current protocols reach.
-2. **Token-ring mutual exclusion**, to locate the `pstate` boundary cheaply.
+1. ~~**Reliable broadcast**, then **ABD**.~~ Both done. Reliable broadcast
+   needed no framework change. ABD split: integrity yes, atomicity blocked.
+2. **Happens-before**, now with two customers rather than one.
+3. **Token-ring mutual exclusion**, to locate the `pstate` boundary cheaply.
 3. **Multi-decree Paxos**, as the scaling test.
 4. **Chain replication**, as a cheap non-quorum contrast.
 5. **VR**, then **Raft**, only after step 3 says whether the invariant style
