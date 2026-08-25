@@ -608,7 +608,8 @@ No combinator ties a running function to a declared abstract action in general.
 `LockLo`, and `server_step_lifts` carries it up — but that is a postcondition
 written for one activity, not a general mechanism, and `Layered`/`BottomLayer`
 derive a stack's bottom from the protocol without connecting it to any code.
-`docs/plan.md`, Phase 3, has the candidate approaches.
+`docs/plan.md`, Phase 3, has the design: abstract actions attributed to
+machine transitions rather than to function bodies.
 
 Also open: protocol state that must be *related* to network state has to live in
 one machine, and `NetSM`'s fields are fixed. That is what blocks global

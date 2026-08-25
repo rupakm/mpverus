@@ -682,17 +682,14 @@ needs the endpoint construction and token division in loops, which is
 mechanical. And `deployment_size` is a new assumption --- an honest one, being a
 fact about a deployment rather than about the protocol.
 
-### Phase 3 — Connecting code to actions — **OPEN, and the main gap**
+### Phase 3 — Connecting code to actions — **OPEN, designed, not started**
 
 Originally stated as "attribute every network operation to a declared action".
 Half of that is now enforced by construction rather than checked: a thread can
 touch only channels whose tokens it holds, and every send goes through the
-machine's own transition with its gate. What remains is the other half, and it
-is a real gap.
+machine's own transition with its gate. What remains is the other half.
 
-Nothing currently states that *a particular Rust function body performs one step
-of a declared abstract action*. Before the move to tokens, `cr_step` carried a
-postcondition of the form
+Before the move to tokens, `cr_step` carried a postcondition of the form
 
 ```rust
 exists|n_pre| Cr::inv(n_pre) && Cr::gate(a, req, n_pre)
@@ -705,31 +702,175 @@ port because it needs the global state that the token representation
 deliberately hides: a thread holds tokens for its own channels and cannot speak
 about the machine's whole state.
 
-`Layered` / `BottomLayer` did the *specification* half of the reconnection — the
-bottom of a refinement stack is now derived from the protocol rather than
-restated. What is missing is the *code* half: a combinator, along the lines of
+**The gap is narrower than it looks.** `leaselock.rs:434` already carries the
+statement by hand:
 
 ```rust
-atomic::<T>(a, req, tokens, |tokens| { ... })
+exists|a: LockAct| LockLo::step(a, Msg::Acquire, h1.last(),
+                                old(self).st(), final(self).st())
 ```
 
-whose postcondition is "this body performed `BottomLayer::<T>::step(a, ...)`".
-Without it, a refinement chain proves things about the protocol's transition
-system but nothing ties a running function to it, so Phases 5 and 6 would
-connect a Leslie model to a specification rather than to code.
+That works because `LockServer::st()` is a function of THAT SERVICE'S OWN
+fields. So the missing piece splits in two. Where the abstract state belongs to
+one participant, this is already possible and needs only a reusable combinator.
+Where the abstract state spans participants -- which is what a TLA or Leslie
+model of Paxos is, one global state machine -- it is blocked, and that is what
+the design below is for.
 
-Two possible approaches:
+#### Two decisions
 
-- Have the trusted primitives accumulate a ghost record of the operations a
-  thread performed since its last interference point, and have the combinator
-  check that record against the declared action. Costs a ghost field on every
-  token operation.
-- Express the step over the *tokens the thread holds* rather than over the whole
-  state, which is closer to how `BottomLayer` already works, and requires
-  `Spec::S` to be instantiable at a partial state.
+**Attribute abstract actions to transitions, not to functions.** The function
+that appears to perform an abstract action is often not where the abstract state
+moves. In Paxos, `commit()` sends a `Decided` and one `Accept` per acceptor, but
+nothing is CHOSEN until some acceptor's `Accepted` completes a quorum, in a
+different participant's code. Attributing actions to function bodies would force
+an atomicity argument this development does not have; attributing them to
+transitions needs none. This is also why the `atomic::<T>(a, req, tokens, |..|)`
+combinator sketched in earlier drafts of this plan is not the shape to build.
 
-The second looks more in keeping with the rest of the design and has not been
-tried.
+**The abstract state must be a function of monotone or owned state, never of
+unowned mutable state.** That is the field discipline of §"Protocol state in the
+network machine" applied to the refinement mapping, and it is what makes the
+mapping stable under interference without an atomicity argument.
+
+#### T1 -- abstract state over `was_sent`
+
+A trait alongside `NetInv`, hooking into the same place:
+
+```rust
+pub trait NetAbs<M, Inv: NetInv<M>> : Sized {
+    type S;   // abstract state
+    type A;   // abstract action
+
+    /// The refinement mapping. A function of the RECORD only, so it is
+    /// monotone-derived and cannot be invalidated by another thread.
+    spec fn abs(was_sent: Set<(ChanId, nat, M)>) -> Self::S;
+
+    /// Which abstract action this send realises. `None` is a stuttering step.
+    spec fn act_of(was_sent: Set<(ChanId, nat, M)>, c: ChanId, i: nat, m: M)
+        -> Option<Self::A>;
+
+    spec fn hi_gate(a: Self::A, s: Self::S) -> bool;
+    spec fn hi_step(a: Self::A, s: Self::S, s2: Self::S) -> bool;
+
+    /// The whole obligation, one per protocol. Same arguments and same shape as
+    /// `lemma_record_inv_preserved`, so it drops into the existing hook.
+    proof fn lemma_send_refines(
+        was_sent: Set<(ChanId, nat, M)>, sent: Map<ChanId, Seq<M>>,
+        c: ChanId, s: Seq<M>, m: M, causes: Set<(ChanId, nat, M)>)
+        requires
+            Inv::record_inv(was_sent), Inv::gate(c, s, m),
+            causes.subset_of(was_sent),
+            Inv::needs_cause(c, m) ==> Inv::caused_by(c, m, causes),
+        ensures ({
+            let post = was_sent.insert((c, s.len(), m));
+            match Self::act_of(was_sent, c, s.len(), m) {
+                Some(a) => Self::hi_gate(a, Self::abs(was_sent))
+                        && Self::hi_step(a, Self::abs(was_sent), Self::abs(post)),
+                None    => Self::abs(post) == Self::abs(was_sent),
+            }
+        });
+}
+```
+
+Defining `abs` over the record buys two things at no cost. `do_recv` and `alloc`
+do not touch `was_sent`, so they stutter without proof; and `abs` is
+monotone-derived, so it inherits the stability property the development already
+rests on.
+
+**What T1 gives.** System-level trace refinement: every reachable machine
+state's abstraction is reachable in the model. Plus per-function contracts of
+one particular kind -- a thread holding a witness knows `was_sent` contains it,
+so it knows any UPWARD-CLOSED predicate of `abs` that the witness forces:
+
+```rust
+fn commit(&mut self, ...) ensures decided(abs(..), b, v)
+```
+
+That is the replacement for "this fragment is atomic action A": *this fragment
+established a monotone abstract fact*. For a model whose actions only ever grow
+the abstract state -- Paxos: ballots promised, values chosen -- it is the same
+strength.
+
+**What T1 does not give, correctly.** Contracts of the form `abs(post) ==
+f(abs(pre))`. Another thread may have moved `abs` concurrently, so no thread can
+claim an exact transition of the global state.
+
+#### T2 -- abstract state over per-participant owned state
+
+Needed when the abstract state is not monotone: a mutable register, a leader
+that changes, a counter that decrements. **This is not a new mechanism. It is
+the `pstate` field of §"Protocol state in the network machine"**, and the
+relation between the two is worth stating precisely, because refinement needs
+strictly less than the safety motivation recorded there.
+
+That section has two fields doing two jobs:
+
+- `pstate` (`map`-sharded, owned per participant) lets a gate read a
+  participant's own state. This is what T2 needs: somewhere for non-monotone
+  abstract state to live that is still stable, because single ownership makes
+  reading it safe.
+- `pfacts` (`persistent_set`, monotone exports) lets a participant PUBLISH a
+  fact so that other participants' RUNNING CODE may consume it as evidence.
+  Step 3 there generalises evidence to `Ev<M, F>` so `send_general` and
+  `learn_cause` carry facts as well as messages.
+
+**A refinement mapping never needs `pfacts`.** `abs` is a spec function over the
+whole machine state and may read every participant's share directly; spec code
+has no ownership discipline. Only running code needs facts delivered to it.
+
+So **T2 is step 1 of that section's five, and stops there**: add `pstate`,
+`pinit`, `pstep`, `do_pstep`, defaulted to a unit type so no existing protocol
+changes. Steps 2 and 3 -- `pfacts` and the `Ev` generalisation, the latter of
+which "touches every use of provenance" -- are needed for the safety motivation
+and not for refinement.
+
+**What T2 does add.** Today `do_send` is the only transition that moves the
+record, so `lemma_send_refines` is a single obligation. With `pstate`,
+`do_pstep` moves the abstract state without sending anything, so the obligation
+becomes one case per transition. That is new work the safety-motivated plan does
+not incur.
+
+**Why Paxos needed neither.** The single-owned-log pattern is a hand-rolled
+substitute for `pstate`: routing an acceptor's state through `alog` puts it in
+`was_sent`, which is monotone and global. Same expressiveness, at the cost of a
+message per state change and of reasoning about the state's history rather than
+its current value.
+
+#### T3 -- global mutable state with no owner
+
+Not supported, and should not be. It violates the field discipline, and any
+thread's claim about it is falsifiable by any other thread. The way to have it
+is to give it an owner -- a lock service -- which reduces it to T2.
+
+#### Order
+
+1. **T1 on `leaselock`.** It already has `LockLo`/`LockHi` and the hand-written
+   per-function version, so it is the cheapest check that `act_of` plus
+   `lemma_send_refines` reproduces something known to work.
+2. **T1 on Paxos** against a single-decree model. The real test. The interesting
+   part is that `act_of` attributes Phase2b to the acceptor's `Accepted` send
+   rather than to the proposer's `commit` -- the linearization point is not in
+   the code that appears to perform the action.
+3. **T2 only when a protocol demands it.** Chandy--Lamport probably does: a
+   snapshot's abstract state includes each process's recorded local state.
+
+#### Risks
+
+**`act_of` taking `was_sent` reintroduces what this is meant to escape.**
+History-dependent attribution is necessary -- the quorum-completing send is the
+one that acts -- but it makes `lemma_send_refines` another statement about a
+large set, which is the 215-line-inductive-step style of
+`lemma_record_inv_preserved`. Mitigation: attribute by message shape wherever
+possible and fall back to history only for the quorum-completing case. If that
+does not hold, T1 buys less than it appears to.
+
+**The composition step is prose, not machine-checked.** Per-transition
+refinement gives trace refinement by an induction over the machine's transitions
+that Verus's invariant mechanism cannot express, since state invariants cannot
+relate consecutive states. It would sit at the same level as the TSM
+meta-theory the development already assumes, and belongs in `movers.tex` §14
+next to that assumption rather than left implicit.
 
 ### Phase 4 — Ergonomics — **DONE**
 
@@ -864,7 +1005,8 @@ it, so `publish` does not disturb the owner. 5 verified, 0 errors.
 
 1. Add `pstate`, `pinit`, `pstep`, `do_pstep`, with all three defaulting to a
    unit type so no existing protocol changes. Check the nine protocols still
-   verify untouched.
+   verify untouched. **This step alone is what Phase 3's T2 needs**; a
+   refinement mapping reads `pstate` in spec and never needs steps 2 and 3.
 2. Add `pfacts`, `pfact_ok`, `publish`, and `fact_inv` (what a fact witness
    guarantees), with the invariant that every published fact was licensed by
    its owner's state.
@@ -1194,8 +1336,10 @@ exit.** `Writer::write_once` contains two blocking receives and nothing requires
 nothing checks, and which the planned `pstate`/`pfacts` work could break
 silently by introducing a field that is neither owned nor monotone.
 
-**Phase 3 remains open**: nothing states that a body performs one step of a
-declared action.
+**Phase 3 remains open**: no general mechanism states that a body performs one
+step of a declared action. (`LockServer::serve_one` does it by hand for an
+abstract state belonging to one participant; the design for the general case,
+including the multi-participant one, is under Phase 3 above.)
 
 **Proposal: make the shape structural rather than documented.** Move blocking
 out of activities and into the driver:
