@@ -38,3 +38,4 @@ pub mod paxos;
 pub mod paxos_system;
 pub mod rbc;
 pub mod abd;
+pub mod abd_hb;
