@@ -64,7 +64,7 @@ counterexamples (each of which must be rejected, and in the right way), and the
 spikes under `spike/` — design experiments that verify but are deliberately not
 integrated.
 
-Currently 158 verified, 0 errors, no `assume` or `admit`. CI runs the same
+Currently 267 verified, 0 errors, no `assume` or `admit`. CI runs the same
 script on a pinned Verus version.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before changing anything, and

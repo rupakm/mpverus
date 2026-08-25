@@ -1133,7 +1133,9 @@ property!{
         have was_sent >= set { (c, j, m2) };
         require(i < j);
         birds_eye let s = pre.sent;
-        assert(Inv::history\_inv_gives2(c, m1, m2)) by { Inv::lemma_history\_inv_gives2(...); };
+        assert(Inv::pair_gives(c, m1, m2)) by {
+            Inv::lemma_pair_gives(s, c, i, j, m1, m2);
+        };
     }
 }
 \end{lstlisting}

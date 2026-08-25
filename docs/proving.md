@@ -22,8 +22,9 @@ Reading order:
    refinement stack.
 5. `docs/movers.pdf` for the ideas, `docs/plan.md` for what is open.
 
-Current state: 242 verified, 0 errors, no `assume` or `admit`, nine behavioural
-`external_body` declarations.
+Current state: 267 verified, 0 errors, no `assume` or `admit`, twelve
+behavioural `external_body` declarations: the five trusted primitives, a clock
+read, and six deployment configuration axioms.
 
 ## Working method
 

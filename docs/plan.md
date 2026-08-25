@@ -1603,13 +1603,18 @@ Already available, and not the interesting part:
 - Set-valued provenance: `caused_by` already takes a set of causes, so a message
   justified by a quorum is expressible.
 
-Not available. Each of these is a rung below.
+Not available WHEN THIS WAS WRITTEN. All three landed with Paxos; kept here as
+a record of what the ladder was for.
 
 - **Quorum gathering.** Collecting replies in arrival order while accumulating
   the set of who has replied, and building a `SetToken` from the witnesses.
-- **Quorum intersection.** Two majorities of a finite set share a member.
-- **A cross-participant invariant preserved at a caused send.** This is the one
-  that will hurt; see the gap below.
+  Now `Inbox::collect` in `src/proc.rs`, which also returns the position of
+  every witness it keeps.
+- **Quorum intersection.** Two majorities of a finite set share a member. Now
+  `lemma_quorums_intersect` in `src/quorum.rs`, instantiated for the protocol
+  as `lemma_quorum_intersect` in `src/examples/paxos.rs`.
+- **A cross-participant invariant preserved at a caused send.** This was the
+  one expected to hurt, and it did; see G1 below.
 
 ## Confirmed gaps
 
@@ -1625,19 +1630,39 @@ quorum of promises it holds witnesses for. Those witnesses are not available
 here. The fix is to pass the causes and their guarantees into this lemma, which
 means splitting it or widening it. Predicted to bite at rung 3.
 
+**RESOLVED.** The lemma now takes `was_sent` and the `causes` set, which is the
+"widening" option above. `Paxos::record_inv` is the cross-participant invariant
+and `lemma_record_inv_preserved` maintains it at each send with the causes in
+hand. It did bite, and the widening was the fix.
+
 **G2 — the finite-set lemmas for quorums are not in vstd.** `lemma_len_union`
 and `lemma_len_intersect` are inequalities; the disjoint-union *equality* that
 intersection needs is absent. `spike/quorum.rs` proves it by induction and then
 derives quorum intersection: 3 verified, 0 errors. Roughly 30 lines, and it
 should move into the library.
 
+**RESOLVED, and the premise was wrong.** Quorum intersection moved into
+`src/quorum.rs`. But vstd DOES have the disjoint-union equality --
+`lemma_set_disjoint_lens`, `set_lib.rs:1220` -- so the hand-rolled induction was
+30 lines re-proving a library lemma, and was deleted in the simplification pass.
+Only `lemma_quorums_intersect` remains, and every `Set::finite()` side condition
+went with it, since sets are finite by construction in this vstd.
+
 **G3 — `Inbox` does not carry its channel names.** `FanOut`/`FanIn` do, which is
 what removed the per-slot quantifier friction. Every quorum protocol will hit
 the same friction on the receive side. Small and mechanical.
 
+**RESOLVED.** `Inbox` has `ids: Ghost<Seq<ChanId>>`. It removed the quantifier
+from four service invariants and the ghost-capture idiom from `Driven::step`.
+
 **G4 — building a `SetToken` inside a loop is untested.** `SetToken::empty` and
 `insert` exist, but accumulating one while relating it to a growing ghost set of
 acceptors has never been done here.
+
+**RESOLVED, then superseded.** It worked -- the proposer's first `gather_one`
+did exactly this -- and was then absorbed into `Inbox::collect`, so no protocol
+has to write the loop. The ghost set of acceptors is now `to_set` of the
+sources collect returns.
 
 ## The rungs
 

@@ -128,12 +128,28 @@ tokenized_state_machine!{
             init was_sent = Set::empty();
         } }
 
+        // Requests need no justification. Splitting the two sends is what
+        // keeps the machine non-vacuous: `was_sent` starts empty and these are
+        // the only sending transitions, so demanding a cause on the request
+        // side too would leave no send enabled from the initial state and every
+        // invariant below would hold for want of any reachable state.
+        // (`have` cannot be written inside a conditional, so this is two
+        // transitions rather than one with a guard.)
         transition!{
-            do_send(c: Chan, s: Seq<M>, m: M, jj: nat) {
+            do_send_req(c: Chan, s: Seq<M>, m: M) {
                 remove sent -= [c => s];
+                require(!is_ack_chan(c));
+                add    sent += [c => s.push(m)];
+                add    was_sent (union)= set { (c, s.len(), m) };
+            }
+        }
+
+        transition!{
+            do_send_ack(c: Chan, s: Seq<M>, m: M, jj: nat) {
+                remove sent -= [c => s];
+                require(is_ack_chan(c) && m is Ack);
                 // The justification, exactly as `send_general` demands it.
                 have   was_sent >= set { (peer(c), jj, M::Req(m->Ack_0)) };
-                require(is_ack_chan(c) ==> m is Ack);
                 add    sent += [c => s.push(m)];
                 add    was_sent (union)= set { (c, s.len(), m) };
             }
@@ -148,8 +164,33 @@ tokenized_state_machine!{
             }
         }
 
-        #[inductive(do_send)]
-        fn do_send_inductive(pre: Self, post: Self, c: Chan, s: Seq<M>, m: M, jj: nat) {
+        #[inductive(do_send_req)]
+        fn do_send_req_inductive(pre: Self, post: Self, c: Chan, s: Seq<M>, m: M) {
+            assert(post.sent =~= pre.sent.insert(c, s.push(m)));
+
+            // ---- PATTERN B: the added element is not on an ack channel, so
+            // the justification is not owed.
+            lemma_answered_grows(pre.was_sent, (c, s.len(), m), 0);
+
+            // ---- PATTERN A: the same fact over the map.
+            assert forall|k: nat|
+                post.sent.dom().contains(#[trigger] ack(k)) && post.sent.dom().contains(req(k))
+                implies answers(post.sent[ack(k)], post.sent[req(k)]) by {
+                assert(pre.sent.dom().contains(ack(k)) && pre.sent.dom().contains(req(k)));
+                assert(is_ack_chan(ack(k))) by { assert((2 * k + 1) % 2 == 1) by (nonlinear_arith); }
+                if c == req(k) {
+                    assert(post.sent[ack(k)] == pre.sent[ack(k)]);
+                    lemma_answers_more_reqs(pre.sent[ack(k)], s, m);
+                    assert(post.sent[req(k)] == s.push(m));
+                } else {
+                    assert(post.sent[ack(k)] == pre.sent[ack(k)]);
+                    assert(post.sent[req(k)] == pre.sent[req(k)]);
+                }
+            }
+        }
+
+        #[inductive(do_send_ack)]
+        fn do_send_ack_inductive(pre: Self, post: Self, c: Chan, s: Seq<M>, m: M, jj: nat) {
             assert(post.sent =~= pre.sent.insert(c, s.push(m)));
 
             // ---- PATTERN B: one element added to a set that only grows.
@@ -160,6 +201,7 @@ tokenized_state_machine!{
                 post.sent.dom().contains(#[trigger] ack(k)) && post.sent.dom().contains(req(k))
                 implies answers(post.sent[ack(k)], post.sent[req(k)]) by {
                 assert(pre.sent.dom().contains(ack(k)) && pre.sent.dom().contains(req(k)));
+                assert(!is_ack_chan(req(k))) by { assert((2 * k) % 2 == 0) by (nonlinear_arith); }
                 if c == ack(k) {
                     assert(post.sent[req(k)] == pre.sent[req(k)]);
                     assert(pre.sent[ack(k)] == s);
@@ -167,10 +209,6 @@ tokenized_state_machine!{
                     assert(peer(c) == req(k));
                     lemma_answers_more_acks(s, pre.sent[req(k)], m, jj as int);
                     assert(post.sent[ack(k)] == s.push(m));
-                } else if c == req(k) {
-                    assert(post.sent[ack(k)] == pre.sent[ack(k)]);
-                    lemma_answers_more_reqs(pre.sent[ack(k)], s, m);
-                    assert(post.sent[req(k)] == s.push(m));
                 } else {
                     assert(post.sent[ack(k)] == pre.sent[ack(k)]);
                     assert(post.sent[req(k)] == pre.sent[req(k)]);
@@ -179,4 +217,22 @@ tokenized_state_machine!{
         }
     }
 }
-verus!{ fn main(){} }
+verus!{
+/// NON-VACUITY. A request send is enabled from the initial state.
+///
+/// This is what the split buys. When `do_send` demanded a cause on EVERY
+/// channel, its guard could never be met: `boot` starts `was_sent` empty and
+/// sending was the only way to add to it, so no state past `boot` was
+/// reachable and both invariants above held for want of anything to check.
+pub proof fn lemma_req_send_enabled(k: nat)
+    ensures
+        // the guard of `do_send_req`, at a request channel
+        !is_ack_chan(req(k)),
+        // ... and the guard of `do_send_ack` is the one that needs a cause
+        is_ack_chan(ack(k)),
+{
+    assert((2 * k) % 2 == 0) by (nonlinear_arith);
+    assert((2 * k + 1) % 2 == 1) by (nonlinear_arith);
+}
+
+fn main(){} }
