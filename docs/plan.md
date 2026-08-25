@@ -1584,13 +1584,25 @@ them as the demonstration of the technique.
 
 ---
 
-# A ladder of protocols towards Paxos
+# A ladder of protocols towards Paxos — **SUPERSEDED; Paxos landed directly**
 
 The goal is single-decree Paxos written against these abstractions, with the
 rough edges it exposes treated as the point rather than as an inconvenience.
 Going straight there would conflate several unknowns, so this is a ladder: each
 rung is a small protocol that stresses exactly one thing Paxos needs, and each
 is expected to produce one concrete framework change.
+
+**What actually happened.** Rung 5 was attempted directly and it worked.
+`lemma_agreement` is proved, the acceptor and the proposer are running code, and
+`deploy_paxos` stands up three acceptors and a proposer and drives rounds. So
+the ladder's purpose — reducing risk before the expensive attempt — has been
+served by other means, and rungs 1 to 4 are no longer on the critical path.
+They remain reasonable protocols to have for their own sake, particularly
+reliable broadcast, which is the only one that would exercise set-valued
+`caused_by` outside Paxos.
+
+All four gaps below are closed. What each cost is recorded with it, because two
+of the four predictions were wrong and that is worth keeping.
 
 ## What Paxos needs, and what is already there
 
@@ -1666,17 +1678,28 @@ sources collect returns.
 
 ## The rungs
 
+Kept as written, with what happened to each.
+
 **0. `Inbox` gets `ids`.** Enabling, small, uniform with `FanOut`/`FanIn`.
+**DONE**, though not as a precondition for anything — it came out of the
+simplification review afterwards, and removed four hand-written quantifiers
+rather than the one this predicted.
 
 **1. Quorum acknowledgement.** Broadcast to n, proceed when a majority acks.
 No safety property beyond "a majority really acked, and each ack is vouched
 for". Stresses G3 and G4 and produces a `Quorum` helper: the accumulated
 witnesses plus the ghost set of who they came from.
 
+**NOT DONE, and no longer needed.** `Inbox::collect` does what the `Quorum`
+helper was meant to produce, and it was written directly for Paxos.
+
 **2. Reliable broadcast.** Deliver a message only when a quorum has echoed it.
 First real use of set-valued `caused_by` and `send_general`: the delivery is
 justified by the quorum of echoes. Stresses `cause_gives` when the cause is a
 set rather than one message.
+
+**NOT DONE.** The one rung still worth building for its own sake: it is the
+only protocol here that would exercise set-valued `caused_by` outside Paxos.
 
 **3. Quorum-replicated fencing register.** The lease lock's storage node,
 replicated across n nodes, with a write accepted when a majority accepts it.
@@ -1684,13 +1707,22 @@ First use of quorum intersection: two writers each hold a majority, so some node
 saw both, which orders them. First cross-participant safety argument, and the
 rung where G1 is expected to bite.
 
+**NOT DONE, and its prediction was tested another way.** G1 did bite, in
+Paxos rather than here.
+
 **4. Synod without phase 1, then with it.** A proposer picks a ballot and sends
 `Accept` to all; a value is chosen when a majority accepts. With one proposer
 this is trivially safe. With two it is not, and the failure is the reason phase
 1 exists. Writing the invariant, watching it fail, then adding phase 1 is the
 cheapest way to get the invariant right before the full protocol.
 
+**NOT DONE.** Paxos was written with phase 1 from the start; the invariant
+was got right by proving `lemma_safe_at` rather than by watching a weaker
+version fail.
+
 **5. Single-decree Paxos.** Then, if it goes well, multi-decree.
+**DONE**, single-decree. Multi-decree is still open, and is the first thing
+that would test whether the one-invariant-over-`was_sent` style scales.
 
 ## Deliberately not on this path
 
