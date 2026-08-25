@@ -36,3 +36,4 @@ pub mod system;
 pub mod lease_system;
 pub mod paxos;
 pub mod paxos_system;
+pub mod rbc;
