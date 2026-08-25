@@ -26,6 +26,7 @@ use vstd::prelude::*;
 use vstd::tokens::KeyValueToken;
 use crate::tok::*;
 use crate::proc::*;
+use crate::abs::*;
 use crate::layer::*;
 use vstd::tokens::InstanceId;
 
@@ -705,5 +706,111 @@ impl NetHandler<Msg, Lease> for Writer {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// EXPERIMENT: the lease lock as a refinement of an abstract model (T1)
+// ---------------------------------------------------------------------------
+//
+// The model is the journal: a growing sequence of accepted writes, strictly
+// increasing in (token, sequence). That is the property the whole protocol
+// exists to establish, and it is the one the implementation's gate already
+// enforces -- so this is a fair test of whether `NetAbs` can express something
+// real without new proof burden.
+//
+// Note which channel it is over. The journal is ONE channel that every storage
+// node writes, so a per-channel gate reaches a system-wide property. Grants are
+// on per-writer channels, so the same trick does NOT give global grant
+// monotonicity -- see the note at the end.
+
+pub struct LeaseAbs;
+
+/// The model has one action: accept a write into the journal.
+pub enum JAct { Accept(Msg) }
+
+impl NetAbs<Msg, Lease> for LeaseAbs {
+    /// The abstract state IS the journal.
+    type S = Seq<Msg>;
+    type A = JAct;
+
+    open spec fn abs(sent: Map<ChanId, Seq<Msg>>) -> Seq<Msg> {
+        if sent.dom().contains(journal()) { sent[journal()] } else { Seq::empty() }
+    }
+
+    /// Decided by message shape alone: `sent` is not read. Whether that stays
+    /// true for a quorum protocol is the open question.
+    open spec fn act_of(sent: Map<ChanId, Seq<Msg>>, c: ChanId, m: Msg) -> Option<JAct> {
+        if c == journal() { Some(JAct::Accept(m)) } else { None }
+    }
+
+    open spec fn hi_gate(a: JAct, s: Seq<Msg>) -> bool {
+        match a {
+            JAct::Accept(m) =>
+                m is Accepted && m->Accepted_0 != 0
+                && forall|x: int| 0 <= x < s.len() ==> lex_lt(#[trigger] s[x], m),
+        }
+    }
+
+    open spec fn hi_step(a: JAct, s0: Seq<Msg>, s1: Seq<Msg>) -> bool {
+        match a { JAct::Accept(m) => s1 =~= s0.push(m) }
+    }
+
+    proof fn lemma_send_refines(
+        sent: Map<ChanId, Seq<Msg>>,
+        was_sent: Set<(ChanId, nat, Msg)>,
+        c: ChanId, s: Seq<Msg>, m: Msg,
+        causes: Set<(ChanId, nat, Msg)>,
+    ) {
+        let post = sent.insert(c, s.push(m));
+        if c == journal() {
+            assert(Self::abs(sent) == s);
+            assert(post.dom().contains(journal()));
+            assert(post[journal()] == s.push(m));
+        } else {
+            if sent.dom().contains(journal()) {
+                assert(post.dom().contains(journal()));
+                assert(post[journal()] == sent[journal()]);
+            }
+        }
+    }
+}
+
+/// THE MODEL-LEVEL PROPERTY, proved once against the model rather than against
+/// the protocol: the journal is strictly increasing.
+///
+/// This is the whole point of a layer. The statement mentions no channel, no
+/// message history and no participant -- only the model's own state and its own
+/// action.
+pub proof fn lemma_journal_increases(s0: Seq<Msg>, s1: Seq<Msg>, a: JAct)
+    requires
+        LeaseAbs::hi_gate(a, s0),
+        LeaseAbs::hi_step(a, s0, s1),
+        forall|x: int, y: int| 0 <= x < y < s0.len() ==> lex_lt(#[trigger] s0[x], #[trigger] s0[y]),
+    ensures
+        forall|x: int, y: int| 0 <= x < y < s1.len() ==> lex_lt(#[trigger] s1[x], #[trigger] s1[y]),
+{
+    let m = a->Accept_0;
+    assert forall|x: int, y: int| 0 <= x < y < s1.len()
+        implies lex_lt(#[trigger] s1[x], #[trigger] s1[y]) by {
+        if y < s0.len() {
+            assert(s1[x] == s0[x] && s1[y] == s0[y]);
+        } else {
+            assert(s1[y] == m);
+            assert(s1[x] == s0[x]);
+        }
+    }
+}
+
+// WHAT THIS DOES NOT REACH.
+//
+// Global grant monotonicity -- every token the server issues exceeds every
+// token it has issued before -- is not expressible this way, and the reason is
+// structural rather than a missing lemma. Grants travel on `acq_rsp(w)`, one
+// channel per writer, so `abs` would have to relate messages on channels that
+// no single gate can see, and no `hi_step` proof could be discharged from a
+// per-channel gate. The server's counter is the state that would settle it, and
+// it is a local variable nobody can read.
+//
+// That is exactly the case tier T2 exists for, and it is the cleanest available
+// demonstration that T1 and T2 are not substitutes.
 
 } // verus!
