@@ -1965,11 +1965,33 @@ it would sharpen exactly where the line falls.
 
 ## Out of reach, and what each would need
 
-**ABD atomicity, Chandy--Lamport snapshots, causal broadcast, vector clocks,
-timestamp-based total order.** All need happens-before across channels. ABD
-moves this from a speculative gap to one that stopped a protocol actually
-built, which makes happens-before competitive with `pstate` for the next
-construct to attempt. `pstate` plus a
+~~**ABD atomicity, Chandy--Lamport snapshots, causal broadcast, vector clocks,
+timestamp-based total order.**~~ **NOT OUT OF REACH, AND NOT A CONSTRUCT.**
+`src/examples/abd_hb.rs` proves ABD atomicity, and `tok.rs`, `proc.rs` and
+`quorum.rs` are untouched. Happens-before turns out to be a PATTERN built from
+two things already present:
+
+  * a gate on ONE channel forcing an owned log's clocks to strictly increase,
+    so clock order and position order agree; and
+  * a provenance obligation carrying one extra word -- the cause's clock is
+    below its effect's -- so a chain of causes is a chain of increasing clocks.
+
+Composed, those are Lamport's relation, and it crosses participants because
+provenance does. `lemma_clock_gives_position` is the bridge: a bigger clock
+means a later position, which turns a chain of provenance into a statement
+about one participant's own history. The read phase must carry a ROUND ID or
+the chain does not close -- a reply's clock being above the round start says
+nothing about the clock of the log entry behind it.
+
+So Chandy--Lamport, causal broadcast and vector clocks move to "reachable, at
+the cost of clock fields and clock-ordered provenance". That also reopens
+Phase 6's pilot choice.
+
+WHAT REMAINS OUT OF REACH IS REAL TIME, which is a different thing. Clocks
+order causally related events; two events with no message path between them are
+incomparable, and correctly so in an asynchronous model. Full linearizability
+quantifies over operations ordered in REAL time with no causal path, so it
+needs an assumption relating timestamps to real time, not a better invariant. `pstate` plus a
 published logical clock is the route; see §"Protocol state in the network
 machine", whose third motivating bullet is this.
 
@@ -1987,7 +2009,7 @@ progress, a Paxos round completes under a stable leader.
 
 1. ~~**Reliable broadcast**, then **ABD**.~~ Both done. Reliable broadcast
    needed no framework change. ABD split: integrity yes, atomicity blocked.
-2. **Happens-before**, now with two customers rather than one.
+2. ~~**Happens-before**.~~ Done, and it needed no construct.
 3. **Token-ring mutual exclusion**, to locate the `pstate` boundary cheaply.
 3. **Multi-decree Paxos**, as the scaling test.
 4. **Chain replication**, as a cheap non-quorum contrast.
